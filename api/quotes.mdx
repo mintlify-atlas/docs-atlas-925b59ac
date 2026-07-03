@@ -61,6 +61,14 @@ Returns a paginated list of quotes for the active company.
 }
 ```
 
+<ResponseField name="datos" type="array">
+  Array of presupuesto objects for the active company.
+</ResponseField>
+
+<ResponseField name="paginacion" type="object">
+  Pagination metadata: `page`, `pageSize`, and `total` record count.
+</ResponseField>
+
 ---
 
 ## POST /api/presupuestos

@@ -1,7 +1,7 @@
 ---
 title: "Authentication: JWT Login and Company Selection"
 sidebarTitle: "Authentication"
-description: "Authenticate with Eme2App using JWT Bearer tokens. Log in, retrieve the current user, select an active company, change passwords, and handle password resets."
+description: "Authenticate with Eme2App via JWT Bearer tokens. Log in, retrieve the current user, select a company, change passwords, and manage password resets."
 ---
 
 Eme2App uses stateless JWT Bearer authentication. Every request to a protected resource must include an `Authorization: Bearer <token>` header. The token is issued at login and encodes the user's `id`, `email`, `rol`, and — after company selection — the `empresa_id` that scopes all subsequent data operations to a single company. Only `/api/version` and the `/api/auth/*` endpoints themselves are public.
@@ -325,6 +325,44 @@ Consumes a password-reset token and sets a new password. No authorization header
 
 ---
 
+## POST /api/auth/reset-admin
+
+<Warning>
+**Development only — disabled in production.** This endpoint is blocked with `403` when `NODE_ENV === 'production'`. It is intended solely for local development resets and is never safe to expose publicly.
+</Warning>
+
+Resets the admin user credentials to `admin@empresa.com` / `admin123`. Requires a valid Bearer token belonging to a `superadmin` user.
+
+**Authorization:** `Bearer <token>` required. Role: `superadmin`.
+
+**Request body:** none required.
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Admin reseteado: admin@empresa.com / admin123"
+}
+```
+
+**Error responses**
+
+| Status | mensaje |
+|--------|---------|
+| 403 | `"No permitido en producción"` |
+| 401 | `"Token no proporcionado"` / `"No autorizado"` |
+| 403 | `"No tienes permiso para acceder a este recurso"` |
+
+**curl example**
+
+```bash
+curl -s -X POST https://api.eme2app.com/api/auth/reset-admin \
+  -H "Authorization: Bearer $SUPERADMIN_TOKEN"
+```
+
+---
+
 ## PUT /api/auth/tema
 
 Persists the user's UI theme preference (`light` or `dark`) in their profile. This value is returned in every subsequent `GET /api/auth/me` and login response.
@@ -342,4 +380,13 @@ Persists the user's UI theme preference (`light` or `dark`) in their profile. Th
   "estado": "exito",
   "mensaje": "Tema actualizado"
 }
+```
+
+**curl example**
+
+```bash
+curl -s -X PUT https://api.eme2app.com/api/auth/tema \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"tema": "dark"}'
 ```

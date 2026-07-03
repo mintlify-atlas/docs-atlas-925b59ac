@@ -4,27 +4,27 @@ sidebarTitle: "Invoices"
 description: "Learn how Eme2App handles invoice lifecycle: creating, emitting, voiding invoices, managing due dates, registering collections, and sending by email."
 ---
 
-Invoices are the central document of Eme2App's billing system. Every invoice moves through a well-defined lifecycle — from an editable **borrador** draft, through **confirmada** (emitted), to one of three settled states: **cobrada** (fully collected), **parcialmente cobrada** (partially collected), or **anulada** (voided). An overdue confirmed invoice whose due dates have passed is flagged as **vencida**. The backend enforces strict transition rules at each step, preventing data loss and ensuring fiscal integrity throughout.
+Invoices are the central document of Eme2App's billing system. Every invoice moves through a well-defined lifecycle — from an editable **borrador** draft, through **confirmada** (emitted with due dates generated), to **anulada** (voided via a mirror negative invoice). Payment status is derived from the state of the invoice's `facturas_vencimientos` rows — `pending`, `partial`, or `cobrado` — rather than being stored directly on the invoice. The backend enforces strict transition rules at each step, preventing data loss and ensuring fiscal integrity throughout.
 
 ---
 
 ## Invoice Lifecycle
 
 ```
-borrador ──► confirmada ──► cobrada
-                  │         parcialmente cobrada
-                  │         vencida
-                  └──► anulada (+ factura espejo negativa)
+borrador ──► confirmada ──► anulada (+ factura espejo negativa)
+    ▲               │
+    └───────────────┘  (revert to borrador if no vencimientos collected)
 ```
 
 | Estado | Meaning |
 |---|---|
 | `borrador` | Draft — fully editable, no due dates generated yet |
-| `confirmada` | Emitted — due dates generated from `forma_pago`; limited edits allowed |
-| `cobrada` | All vencimientos have been collected |
-| `parcialmente cobrada` | At least one vencimiento collected, others still pending |
-| `vencida` | One or more vencimientos are past their `fecha_vencimiento` and unpaid |
+| `confirmada` | Emitted — due dates generated from `forma_pago`; can be reverted to borrador if no cobros exist |
 | `anulada` | Voided — a mirror negative invoice (rectificativa) was automatically created |
+
+<Note>
+`cobrada`, `parcialmente cobrada`, and `vencida` are **display states derived from vencimientos** — they are not stored in the `facturas.estado` column. An invoice is considered fully collected when all its `facturas_vencimientos` rows reach `cobrado` state.
+</Note>
 
 ---
 
@@ -182,7 +182,7 @@ Only `confirmada` invoices can be voided. The system:
 ```
 
 <Note>
-To delete the rectificative invoice and restore the original to `confirmada`, simply delete the rectificative via `DELETE /api/facturas/:id`. The backend detects the `factura_origen_anulacion_id` link and restores the original automatically.
+To delete the rectificative invoice and restore the original to `confirmada`, call `DELETE /api/facturas/:id` on the rectificative. The backend detects the `factura_origen_anulacion_id` link and restores the original automatically. Note that invoices with grouped vencimientos (`agrupador_id`) cannot be voided until they are ungrouped from the Treasury module.
 </Note>
 
 ---
@@ -310,7 +310,7 @@ The backend uses the company's configured SMTP settings (`smtp_host`, `smtp_port
 | `PUT` | `/api/facturas/:id/estado` | Change billing state |
 | `PATCH` | `/api/facturas/:id/estado-emision` | Advance emission state |
 | `POST` | `/api/facturas/:id/anular` | Void invoice (creates mirror negative) |
-| `DELETE` | `/api/facturas/:id` | Delete invoice (borrador only) |
+| `DELETE` | `/api/facturas/:id` | Delete invoice (blocked if cobros exist or vencimientos are grouped) |
 | `POST` | `/api/facturas/:id/enviar-email` | Send PDF by email |
 | `GET` | `/api/facturas/:id/vencimientos` | List due dates |
 | `GET` | `/api/facturas/:id/vencimientos-disponibles` | List pending/partial due dates |

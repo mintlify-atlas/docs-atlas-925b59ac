@@ -1,7 +1,7 @@
 ---
-title: "Company Profile, Logo, SMTP, and Certificates"
+title: "Eme2App Company: Profile, SMTP Email, and Certificates"
 sidebarTitle: "Company"
-description: "Configure your company's profile, logo, SMTP email provider, AEAT digital certificate, fiscal advisory data, accounting counters, and custom parameters in Eme2App."
+description: "Configure company profile, logo, SMTP provider, AEAT certificate, fiscal advisory, accounting counters, and custom parameters in Eme2App."
 ---
 
 Every document, PDF header, and outbound email in Eme2App originates from the data stored in **Configuración → Empresa**. This single record holds your legal identity (NIF, razón social, nombre comercial), contact details, SMTP credentials for sending invoices by email, the AEAT digital certificate used for electronic operations, and auxiliary tables such as accounting counters and free-form company parameters. All write operations on this record require the `admin` role; any authenticated user can read the current empresa profile via `GET /api/empresa`.
@@ -26,14 +26,16 @@ The `empresa` table stores one record per tenancy. The fields you can view and e
 | `web` | string \| null | Corporate website URL. |
 | `logo` | string \| null | Base64-encoded logo image. |
 | `usa_series` | boolean | When `true`, invoice series are enabled on all documents. |
-| `pageSize_default` | integer | Default rows-per-page in lists (default 25). |
+| `pagesize_default` | integer | Default rows-per-page in lists (default 25). |
 | `digitos_plan_contable` | integer | Digits used for the accounting plan (default 8). |
 
 <Note>
   The API response never includes `smtp_pass`. The password is stored server-side and merged automatically when building email connections.
 </Note>
 
-### Update Company Profile
+### Create or Update Company Profile
+
+Both `POST /api/empresa` (initial creation, returns HTTP 201) and `PUT /api/empresa` (update, returns HTTP 200) accept the same request body and require the `admin` role. In practice most tenants use `PUT /api/empresa` for all subsequent edits after the empresa record is seeded at setup time.
 
 ```http
 PUT /api/empresa
@@ -346,9 +348,12 @@ Content-Type: application/json
 Store the contact details of the company's tax advisor so that automated accounting summaries and reports can be sent directly to them.
 
 ```http
-GET /api/empresa/asesoria        # Read current advisory data
-PUT /api/empresa/asesoria        # Update advisory data (admin only)
+GET /api/empresa/aplicaciones-asesoria   # List advisory application options (public selector, no empresa filter)
+GET /api/empresa/asesoria                # Read current advisory data
+PUT /api/empresa/asesoria                # Update advisory data (admin only)
 ```
+
+`GET /api/empresa/aplicaciones-asesoria` returns the list of accounting-software application names available for the advisory integration selector (e.g., A3, ContaPlus, Sage). It requires authentication but not an active `empresa_id`.
 
 **Example payload for `PUT /api/empresa/asesoria`:**
 

@@ -1,7 +1,7 @@
 ---
 title: "Admin App API: Superadmin Multi-Company Management"
 sidebarTitle: "Admin App"
-description: "REST API reference for Eme2App superadmin operations. Manage companies, cross-company users, user-company assignments, system email config, and AEAT certificates."
+description: "REST API reference for Eme2App superadmin. Manage all companies, cross-company users, assignments, system SMTP config, and AEAT certificates."
 ---
 
 The Admin App API is the control plane for the entire Eme2App installation. Unlike the per-company [Users API](/api/users) — which operates inside a single tenant — every endpoint here works across all companies simultaneously. Through these routes a superadmin can create and delete companies, provision users globally, manage which users belong to which companies, configure the platform's outbound email infrastructure, and upload the AEAT digital certificate used for tax-authority integrations. Because these operations cross tenant boundaries they are not subject to the `empresa_id` scope that governs all other API calls.
@@ -298,7 +298,7 @@ curl -X GET https://app.eme2app.com/api/adminapp/usuarios \
 
 ### POST /api/adminapp/usuarios
 
-Create a new user at the platform level and assign them to a company in a single request. If a user with the given email already exists, the creation step is skipped and the user is assigned to the specified company (if not already assigned). `empresa_id` is required at creation time.
+Create a new user at the platform level and optionally assign them to a company in a single request. If a user with the given email already exists, the creation step is skipped and the user is assigned to the specified company if `empresa_id` is provided and the assignment does not already exist.
 
 #### Request body
 
@@ -318,8 +318,8 @@ Create a new user at the platform level and assign them to a company in a single
   Role for this user. Accepted values: `"admin"` or `"user"`. Superadmin accounts cannot be created through this endpoint.
 </ParamField>
 
-<ParamField body="empresa_id" type="string" required>
-  UUID of the company to assign the user to. Required — a user cannot be created without an initial company assignment.
+<ParamField body="empresa_id" type="string">
+  UUID of the company to assign the new user to at creation time. Optional — when provided the user is automatically linked to the specified company via `usuario_empresas`. If omitted, the user is created without any company assignment; use `POST /api/adminapp/usuario-empresas` afterwards to link them.
 </ParamField>
 
 ```bash

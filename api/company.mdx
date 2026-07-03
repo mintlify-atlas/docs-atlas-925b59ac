@@ -1,7 +1,7 @@
 ---
 title: "Company API: Profile, Logo, SMTP, and Certificates"
 sidebarTitle: "Company"
-description: "REST API reference for Eme2App company settings. Retrieve and update company profile, upload logo, configure SMTP, manage AEAT certificates, and handle accounting data."
+description: "REST API reference for Eme2App company settings. Update profile, configure outbound SMTP, manage AEAT certificates, and accounting counters."
 ---
 
 The Company API is the control plane for every tenant-level setting in Eme2App. A single `empresa` record holds the company's legal identity (name, NIF, address), outbound email configuration (SMTP provider and credentials), the company logo stored as a base64 string, fiscal advisory details, arbitrary key/value parameters, numeric counters used for invoice and document numbering, and the AEAT digital certificate required for electronic VAT submissions. Most write endpoints are restricted to users with role `admin`; read endpoints are available to any authenticated user belonging to the company.
@@ -36,6 +36,8 @@ Authorization: Bearer <token>
 | `DELETE` | `/api/empresa/contadores/:campo` | admin | Delete a counter |
 | `POST` | `/api/empresa/recalcular-cuentas-contables` | admin | Recalculate accounting codes |
 | `POST` | `/api/empresa/exportar-cuentas-contables/excel` | admin | Export accounting codes to Excel |
+| `POST` | `/api/empresa/enviar-resumen-cuentas` | admin | Email accounting code summary |
+| `GET` | `/api/empresa/aplicaciones-asesoria` | any | List fiscal advisory applications |
 | `GET` | `/api/empresa/certificado` | admin | Get AEAT certificate info |
 | `POST` | `/api/empresa/certificado` | admin | Upload AEAT PFX/P12 certificate |
 | `DELETE` | `/api/empresa/certificado` | admin | Remove AEAT certificate |
@@ -650,6 +652,83 @@ curl -X POST https://api.eme2app.es/api/empresa/exportar-cuentas-contables/excel
 </ParamField>
 
 The response sets `Content-Disposition: attachment; filename="cuentas_contables_YYYY-MM-DD.xlsx"`.
+
+### POST /api/empresa/enviar-resumen-cuentas
+
+Sends the accounting code recalculation summary to an email address. The email is delivered using the company's own SMTP configuration and contains a plain-text report listing each client and supplier row with its old and new account code (or any error that occurred during recalculation). Requires `admin` role.
+
+```bash
+curl -X POST https://api.eme2app.es/api/empresa/enviar-resumen-cuentas \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "destino": "contabilidad@miempresa.es",
+    "filas": [...],
+    "digitos": 8
+  }'
+```
+
+<ParamField body="destino" type="string" required>
+  Recipient email address for the summary report. Returns `400` when omitted or blank.
+</ParamField>
+
+<ParamField body="filas" type="array">
+  Array of accounting row objects produced by `POST /api/empresa/recalcular-cuentas-contables`. Each row should include `tipo`, `codigo_numerico`, `nombre`, `nif`, `cuenta_anterior`, `cuenta_nueva`, and optionally `error`. Defaults to an empty array when omitted.
+</ParamField>
+
+<ParamField body="digitos" type="number">
+  Number of digits used in the account codes; shown in the email subject line.
+</ParamField>
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Resumen enviado a contabilidad@miempresa.es"
+}
+```
+
+#### Response `400` — missing destination
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Email de destino requerido"
+}
+```
+
+---
+
+## Fiscal advisory applications
+
+### GET /api/empresa/aplicaciones-asesoria
+
+Returns the global list of registered fiscal advisory application integrations. This is a read-only catalog shared across all companies — it is not filtered by `empresa_id`. Use the returned `id` values to populate the `aplicacion_id` field when saving advisory data via `PUT /api/empresa/asesoria`. Available to any authenticated user.
+
+```bash
+curl -X GET https://api.eme2app.es/api/empresa/aplicaciones-asesoria \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "uuid-app-contasol",
+      "nombre": "Contasol Online",
+      "clave_exportacion": "CTSOL2024"
+    }
+  ]
+}
+```
+
+<ResponseField name="datos" type="array">
+  Array of fiscal advisory application objects. Each entry includes `id`, `nombre`, and `clave_exportacion`.
+</ResponseField>
 
 ---
 

@@ -1,5 +1,5 @@
 ---
-title: "Quotes and Budgets: Build and Convert to Invoices"
+title: "Eme2App Quotes: Send Budgets and Convert to Invoices"
 sidebarTitle: "Quotes"
 description: "Create and manage client quotes in Eme2App. Accept a quote to automatically generate a draft invoice, or send it directly by email."
 ---
@@ -11,23 +11,23 @@ Quotes (presupuestos) let you propose prices to clients before any fiscal docume
 ## Quote Lifecycle
 
 ```
-borrador ──► emitida ──► aceptada ──► (factura borrador created)
-                  └──► rechazada
-                  └──► caducada
-                  └──► convertida  (converted to albarán instead)
+borrador ──► emitida ──► pagada
+                  └──► cancelada
+                  └──► aceptada   (set automatically on POST /:id/aceptar)
+                  └──► convertida (set automatically on POST /albaranes/desde-presupuesto/:id)
 ```
 
 | Estado | Meaning |
 |---|---|
 | `borrador` | Draft — fully editable |
-| `emitida` | Sent to the client (status updated manually or via email send) |
-| `aceptada` | Client accepted; a draft invoice has been generated |
-| `rechazada` | Client declined |
-| `caducada` | Validity date passed without a response |
+| `emitida` | Sent to the client (set manually via `PUT /:id/estado`) |
+| `pagada` | Marked as accepted and paid (set manually via `PUT /:id/estado`) |
+| `cancelada` | Cancelled (set manually via `PUT /:id/estado`) |
+| `aceptada` | Client accepted; a draft invoice has been generated automatically |
 | `convertida` | Converted to a delivery note (albarán) instead of an invoice |
 
 <Note>
-A quote in `cancelada`, `aceptada`, or `convertida` state cannot be accepted again. These states are terminal.
+A quote in `cancelada`, `aceptada`, or `convertida` state cannot be accepted again. These states are terminal. The `aceptada` and `convertida` states are set automatically by the system — they cannot be assigned via `PUT /:id/estado`.
 </Note>
 
 ---
@@ -133,7 +133,7 @@ Use this endpoint to manually advance the quote state (e.g. to mark it as sent, 
 ```
 
 <Warning>
-The valid states accepted by this endpoint are `borrador`, `emitida`, `pagada`, and `cancelada`. The `aceptada` and `convertida` states are set automatically by the accept/convert flows and cannot be set manually.
+The valid states accepted by this endpoint are `borrador`, `emitida`, `pagada`, and `cancelada`. The `aceptada` and `convertida` states are set automatically by the system (`POST /:id/aceptar` and `POST /api/albaranes/desde-presupuesto/:id` respectively) and cannot be assigned manually.
 </Warning>
 
 ---

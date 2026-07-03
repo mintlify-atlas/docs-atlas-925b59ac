@@ -1,7 +1,7 @@
 ---
-title: "Clients API: Customer Records with Fiscal Data"
+title: "Clients API: Customer Records with Spanish Fiscal Data"
 sidebarTitle: "Clients"
-description: "REST API reference for Eme2App clients. Create, update, and manage customer records including NIF, fiscal regime, IRPF, default payment terms, and activation status."
+description: "REST API reference for Eme2App clients. Manage customer records with NIF, fiscal regime, IRPF withholding, and default payment terms."
 ---
 
 The Clients API manages the customer master record for each company (`empresa`). Every client is scoped to a single `empresa_id` derived from the authenticated user's JWT, so calls across tenants are impossible by design. Clients carry full Spanish fiscal metadata — tax regime (`regimen_fiscal_id`), fiscal territory (`territorio_fiscal_id`), IRPF withholding regime (`regimen_irpf_id`), an optional default payment term, and an optional accounting sub-account (`cuenta_contable_ventas`). The NIF is stored normalised to uppercase and is enforced unique per company at the database level, though the API returns an **advisory** `nif_existente` object instead of blocking the write — see [NIF advisory behaviour](#nif-advisory-behaviour) below.

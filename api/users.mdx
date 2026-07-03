@@ -1,7 +1,7 @@
 ---
 title: "Users API: Create and Manage Company User Accounts"
 sidebarTitle: "Users"
-description: "REST API reference for Eme2App user management. Create, update, and delete users within your company. Requires admin role. Distinct from the superadmin adminapp endpoints."
+description: "REST API reference for Eme2App user management. Create, update, and delete company users. Admin role required for most write operations."
 ---
 
 The Users API lets administrators manage the people who have access to their company workspace in Eme2App. Every request operates within the scope of a single **empresa** — the company encoded in the caller's JWT — so one admin cannot accidentally read or modify users belonging to a different tenant. Creating a user here automatically associates them to the caller's company through the `usuario_empresas` join table. If you need to provision users across multiple companies or perform cross-tenant operations, use the [Admin App API](/api/adminapp) instead, which exposes the equivalent endpoints under `/api/adminapp/usuarios` and is restricted to the `superadmin` role.

@@ -52,8 +52,7 @@ Authorization: Bearer <your_jwt_token>
 | `GET /api/informes/iva` | VAT report: repercutido vs soportado by fiscal period | ✅ | ✅ |
 | `GET /api/informes/tesoreria` | Treasury report: outstanding due dates and balances | ✅ | ✅ |
 | `GET /api/informes/tesoreria/flujo` | Cash flow timeline: expected vs actual monthly collections | ❌ | ❌ |
-| `GET /api/informes/exportar/:tipo/excel` | Download Excel for any of the five exportable types | — | — |
-| `GET /api/informes/exportar/:tipo/pdf` | Download PDF for any of the five exportable types | — | — |
+| `GET /api/informes/exportar/:tipo/:formato` | Download Excel or PDF for any of the five exportable report types | — | — |
 
 ---
 

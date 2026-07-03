@@ -1,7 +1,7 @@
 ---
 title: "AEAT NIF Validation: Single and Bulk Tax Identity Checks"
 sidebarTitle: "AEAT Validation"
-description: "Validate Spanish NIF and CIF identities against the AEAT tax census in Eme2App. Supports single validation, bulk processing up to 20,000 NIFs, and cache-only lookups."
+description: "Validate Spanish NIFs and CIFs against the AEAT tax census. Single checks, bulk validation up to 20,000 NIFs, and cache-only lookups — all in Eme2App."
 ---
 
 Eme2App connects to the Spanish Tax Agency (Agencia Estatal de Administración Tributaria, AEAT) via its **VNifV2 SOAP web service** to verify whether a NIF or CIF belongs to a registered taxpayer in the Spanish census. Every validation result is cached in Eme2App's database, so repeat lookups for already-identified taxpayers are served instantly without a second SOAP call. The service supports individual NIF checks, approximate name searches across cached results, and batch operations that process up to 20,000 taxpayers in a single API request — all under the same JWT-authenticated context.
@@ -57,7 +57,7 @@ The response returns the certificate subject, issuer, validity dates, serial num
     Approximate name search across all cached validated NIFs.
   </Card>
   <Card title="POST /api/aeat/validar" icon="shield-check">
-    Single NIF validation — always calls AEAT, bypasses the cache read.
+    Single NIF validation — checks cache first, calls AEAT on a cache miss.
   </Card>
   <Card title="POST /api/aeat/validar-masivo" icon="list-check">
     Bulk NIF validation for up to 20,000 taxpayers per request.
@@ -129,7 +129,7 @@ curl "https://your-eme2app.com/api/aeat/buscar-por-nombre/Construcciones%20Lopez
 
 ## POST /api/aeat/validar
 
-Validates a single NIF against the live AEAT VNifV2 SOAP service. The cache is **not** consulted for the read path — this endpoint always fires a real SOAP request. A successful `IDENTIFICADO` result is then written to the cache for future lookups.
+Validates a single NIF against the live AEAT VNifV2 SOAP service. Before making the SOAP call, Eme2App checks the local cache for an existing `IDENTIFICADO` result — if found, it is returned immediately without a network request. If the NIF is not cached, or its cached result is not `IDENTIFICADO`, a real SOAP request is made and a successful result is then written to the cache for future lookups.
 
 ### Request body
 
@@ -304,9 +304,9 @@ Eme2App applies several normalization steps before calling AEAT:
 
 ## Cache vs. live call — quick reference
 
-| Endpoint                         | Reads cache | Writes cache | Calls AEAT SOAP |
-|----------------------------------|:-----------:|:------------:|:---------------:|
-| `GET /cache-check/:nif`          | ✅           | ❌           | ❌              |
-| `GET /buscar-por-nombre/:q`      | ✅           | ❌           | ❌              |
-| `POST /validar`                  | ❌           | ✅ (on hit)  | ✅ always       |
-| `POST /validar-masivo`           | ❌           | ✅ (on hit)  | ✅ per entry    |
+| Endpoint                         | Reads cache | Writes cache    | Calls AEAT SOAP         |
+|----------------------------------|:-----------:|:---------------:|:-----------------------:|
+| `GET /cache-check/:nif`          | ✅           | ❌             | ❌                      |
+| `GET /buscar-por-nombre/:q`      | ✅           | ❌             | ❌                      |
+| `POST /validar`                  | ✅ (exact)  | ✅ (on IDENTIFICADO) | Only on cache miss |
+| `POST /validar-masivo`           | ✅ per entry | ✅ (on IDENTIFICADO) | Only on cache miss |

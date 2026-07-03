@@ -65,7 +65,6 @@ Returns a paginated list of invoices belonging to the active company.
       "fecha": "2024-03-15",
       "cliente_id": "uuid",
       "estado": "confirmada",
-      "estado_emision": "email",
       "subtotal": "1000.00",
       "iva_monto": "210.00",
       "irpf_monto": "0.00",
@@ -399,6 +398,12 @@ Returns all cobros for the invoice along with a payment summary.
 
 Deletes a cobro and reverts the associated vencimiento to `pending`. If the payment was partial and a rest vencimiento was created, that rest vencimiento is also removed.
 
+**Response**
+
+```json
+{ "mensaje": "Cobro eliminado exitosamente y vencimientos revertidos si fue necesario" }
+```
+
 ---
 
 ## PUT /api/facturas/cobros/:id
@@ -409,6 +414,31 @@ Updates metadata on a cobro (date, instrument, notes). The `importe` field canno
 <ParamField body="instrumento_id" type="string (UUID)">Replacement payment instrument.</ParamField>
 <ParamField body="referencia" type="string">External reference number.</ParamField>
 <ParamField body="notas" type="string">Internal note.</ParamField>
+
+---
+
+## DELETE /api/facturas/cobros/:id
+
+Deletes a cobro by its own ID and reverts the effect on its associated vencimiento (the vencimiento is restored to `pending` and any partial-payment rest vencimientos are removed). Functionally equivalent to `DELETE /api/facturas/:id/cobros/:cobro_id` but addressed directly by cobro ID, without needing the parent invoice ID.
+
+**Path parameter**
+
+| Parameter | Description |
+|-----------|-------------|
+| `:id` | UUID of the cobro to delete. |
+
+**Response**
+
+```json
+{ "mensaje": "Cobro eliminado exitosamente" }
+```
+
+**curl example**
+
+```bash
+curl -s -X DELETE https://api.eme2app.com/api/facturas/cobros/ccc00000-0000-0000-0000-000000000001 \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 ---
 
