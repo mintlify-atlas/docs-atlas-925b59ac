@@ -1,0 +1,375 @@
+---
+title: "Company Profile, Logo, SMTP, and Certificates"
+sidebarTitle: "Company"
+description: "Configure your company's profile, logo, SMTP email provider, AEAT digital certificate, fiscal advisory data, accounting counters, and custom parameters in Eme2App."
+---
+
+Every document, PDF header, and outbound email in Eme2App originates from the data stored in **Configuración → Empresa**. This single record holds your legal identity (NIF, razón social, nombre comercial), contact details, SMTP credentials for sending invoices by email, the AEAT digital certificate used for electronic operations, and auxiliary tables such as accounting counters and free-form company parameters. All write operations on this record require the `admin` role; any authenticated user can read the current empresa profile via `GET /api/empresa`.
+
+---
+
+## Company Profile Fields
+
+The `empresa` table stores one record per tenancy. The fields you can view and edit via `GET /api/empresa` and `PUT /api/empresa` are:
+
+| Field | Type | Description |
+|---|---|---|
+| `nombre` | string | Legal company name (razón social). Required. |
+| `nombre_comercial` | string \| null | Trading name shown on documents. |
+| `nif` | string | Tax identification number (NIF/CIF). |
+| `email` | string | Corporate contact email. |
+| `telefono` | string | Contact phone number. |
+| `direccion` | string | Street address. |
+| `codigo_postal` | string | Postal code. |
+| `localidad` | string | City / town. |
+| `provincia` | string | Province. |
+| `web` | string \| null | Corporate website URL. |
+| `logo` | string \| null | Base64-encoded logo image. |
+| `usa_series` | boolean | When `true`, invoice series are enabled on all documents. |
+| `pageSize_default` | integer | Default rows-per-page in lists (default 25). |
+| `digitos_plan_contable` | integer | Digits used for the accounting plan (default 8). |
+
+<Note>
+  The API response never includes `smtp_pass`. The password is stored server-side and merged automatically when building email connections.
+</Note>
+
+### Update Company Profile
+
+```http
+PUT /api/empresa
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "nombre": "Distribuciones García S.L.",
+  "nombre_comercial": "García Dist.",
+  "nif": "B12345678",
+  "email": "contacto@garciadist.es",
+  "telefono": "912 345 678",
+  "direccion": "Calle Mayor 12, 2ª planta",
+  "codigo_postal": "28001",
+  "localidad": "Madrid",
+  "provincia": "Madrid",
+  "web": "https://garciadist.es",
+  "usa_series": true
+}
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Empresa actualizada exitosamente",
+  "datos": { "id": "...", "nombre": "Distribuciones García S.L.", "..." }
+}
+```
+
+---
+
+## Logo Upload
+
+The logo is stored as a Base64 data URI and rendered in PDF headers and the application navbar. Upload or replace it independently of the main profile form.
+
+```http
+PUT /api/empresa/logo/upload
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "logoBase64": "data:image/png;base64,iVBORw0KGgoAAAANS..."
+}
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Logo actualizado exitosamente",
+  "datos": { "id": "...", "logo": "data:image/png;base64,..." }
+}
+```
+
+<Tip>
+  Recommended logo format: PNG or SVG at 300×100 px, transparent background. Maximum upload size is 5 MB.
+</Tip>
+
+---
+
+## SMTP Configuration
+
+Eme2App can send invoices, quotes, and password-reset emails directly from your company's email account. Configure the provider in the same `PUT /api/empresa` call by adding the SMTP fields.
+
+<Accordion title="Gmail">
+  Enable **App Passwords** in your Google account (requires 2-step verification).
+
+  ```json
+  {
+    "smtp_provider": "gmail",
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 465,
+    "smtp_secure": true,
+    "smtp_user": "tu@empresa.com",
+    "smtp_pass": "<google-app-password>",
+    "email_from": "Distribuciones García <tu@empresa.com>"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Outlook / Microsoft 365">
+  Use port 587 with STARTTLS (`smtp_secure: false`) or port 465 with SSL (`smtp_secure: true`).
+
+  ```json
+  {
+    "smtp_provider": "outlook",
+    "smtp_host": "smtp.office365.com",
+    "smtp_port": 587,
+    "smtp_secure": false,
+    "smtp_user": "tu@empresa.com",
+    "smtp_pass": "<password>",
+    "email_from": "Distribuciones García <tu@empresa.com>"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Brevo (ex-Sendinblue)">
+  Use the SMTP credentials found in **Brevo → Transactional → SMTP & API**.
+
+  ```json
+  {
+    "smtp_provider": "brevo",
+    "smtp_host": "smtp-relay.brevo.com",
+    "smtp_port": 587,
+    "smtp_secure": false,
+    "smtp_user": "tu@empresa.com",
+    "smtp_pass": "<brevo-smtp-key>",
+    "email_from": "Distribuciones García <noreply@empresa.com>"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Custom SMTP server">
+  Set `smtp_provider` to `"custom"` and fill in the host and port of your mail server.
+
+  ```json
+  {
+    "smtp_provider": "custom",
+    "smtp_host": "mail.tuservidor.es",
+    "smtp_port": 465,
+    "smtp_secure": true,
+    "smtp_user": "facturas@empresa.com",
+    "smtp_pass": "<password>",
+    "email_from": "Facturas <facturas@empresa.com>"
+  }
+  ```
+</Accordion>
+
+### Testing SMTP
+
+Verify that the credentials work before saving, or after any change, by sending a test message:
+
+```http
+POST /api/empresa/probar-email
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "destino": "verificacion@ejemplo.es",
+  "smtp_provider": "gmail",
+  "smtp_host": "smtp.gmail.com",
+  "smtp_port": 465,
+  "smtp_secure": true,
+  "smtp_user": "tu@empresa.com",
+  "smtp_pass": "<google-app-password>",
+  "email_from": "Distribuciones García <tu@empresa.com>"
+}
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Email de prueba enviado a verificacion@ejemplo.es"
+}
+```
+
+<Warning>
+  `smtp_provider` must be one of `gmail`, `outlook`, `brevo`, or `custom`. Any other value is rejected with HTTP 400.
+</Warning>
+
+---
+
+## AEAT Digital Certificate
+
+Upload your company's `.pfx` or `.p12` digital certificate so Eme2App can sign electronic communications with the AEAT (Agencia Estatal de Administración Tributaria). The file is converted to PEM format server-side and stored encrypted; the private key is never returned to the client.
+
+### Upload Certificate
+
+```http
+POST /api/empresa/certificado
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+
+certificado: <file.pfx>
+passphrase:  <certificate-password>
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Certificado AEAT guardado correctamente",
+  "datos": {
+    "subject": "CN=DISTRIBUCIONES GARCIA SL, OID.2.5.4.97=VATES-B12345678, ...",
+    "organization": "DISTRIBUCIONES GARCIA SL",
+    "nif": "B12345678",
+    "empresa_nif": "B12345678",
+    "issuer": "CN=AC Representación",
+    "valid_from": "2023-01-01T00:00:00.000Z",
+    "valid_to": "2026-01-01T00:00:00.000Z",
+    "serial": "1A2B3C4D"
+  }
+}
+```
+
+### View Certificate Info
+
+```http
+GET /api/empresa/certificado
+Authorization: Bearer <token>
+```
+
+Returns the same metadata object shown above (subject, issuer, validity dates, NIF). If no certificate is uploaded the `datos` field is `null`.
+
+### Delete Certificate
+
+```http
+DELETE /api/empresa/certificado
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Certificado AEAT eliminado correctamente"
+}
+```
+
+<Warning>
+  The certificate file must have extension `.pfx` or `.p12`. Maximum file size is 5 MB. All certificate operations require the `admin` role.
+</Warning>
+
+---
+
+## Accounting Counters
+
+Counters track sequential numeric values used for generating accounting plan codes. Each counter is identified by a `campo` (field name) and stores an integer `valor`.
+
+<Steps>
+  <Step title="List counters">
+    ```http
+    GET /api/empresa/contadores
+    Authorization: Bearer <token>
+    ```
+  </Step>
+  <Step title="Create or update a counter">
+    ```http
+    POST /api/empresa/contadores
+    Authorization: Bearer <token>
+    Content-Type: application/json
+
+    {
+      "campo": "clientes",
+      "valor": 430001
+    }
+    ```
+  </Step>
+  <Step title="Delete a counter">
+    ```http
+    DELETE /api/empresa/contadores/:campo
+    Authorization: Bearer <token>
+    ```
+  </Step>
+</Steps>
+
+### Recalculate Accounting Codes
+
+When you change the number of digits in your accounting plan, trigger a bulk recalculation for all clients and suppliers:
+
+```http
+POST /api/empresa/recalcular-cuentas-contables
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "digitos": 8
+}
+```
+
+The `digitos` value must be an integer between **6** and **12**. The response contains one row per entity with the previous and new accounting code, and an `error` field for any records that could not be recalculated.
+
+<Tip>
+  After recalculation you can export the full result as an Excel file via `POST /api/empresa/exportar-cuentas-contables/excel`, or email it with `POST /api/empresa/enviar-resumen-cuentas`.
+</Tip>
+
+---
+
+## Company Parameters
+
+Free-form key/value pairs let you store custom configuration values scoped to the active empresa—for example, default text blocks, custom codes, or integration tokens.
+
+| Field | Description |
+|---|---|
+| `parametro` | Parameter name (key). Required, must be non-empty. |
+| `descripcion` | Optional human-readable description. |
+| `valor` | String value. |
+
+```http
+GET    /api/empresa/parametros
+POST   /api/empresa/parametros
+DELETE /api/empresa/parametros/:parametro
+```
+
+**Create a parameter:**
+
+```http
+POST /api/empresa/parametros
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "parametro": "TEXTO_PIE_FACTURA",
+  "descripcion": "Texto legal en el pie de todas las facturas",
+  "valor": "Sujeto pasivo del IVA. Artículo 84 LIVA."
+}
+```
+
+---
+
+## Fiscal Advisory (Asesoría)
+
+Store the contact details of the company's tax advisor so that automated accounting summaries and reports can be sent directly to them.
+
+```http
+GET /api/empresa/asesoria        # Read current advisory data
+PUT /api/empresa/asesoria        # Update advisory data (admin only)
+```
+
+**Example payload for `PUT /api/empresa/asesoria`:**
+
+```json
+{
+  "nombre": "Asesoría Fiscal López & Asociados",
+  "email": "asesor@lopezasociados.es",
+  "telefono": "914 000 111",
+  "contacto": "Marta López"
+}
+```
+
+---
+
+## Countries Catalog
+
+A global read-only catalog of countries is available for assigning a country to clients and suppliers:
+
+```http
+GET /api/empresa/paises
+Authorization: Bearer <token>
+```
+
+Each country record contains `id`, `codigo` (ISO 3166-1 alpha-2), `nombre`, and `territorio_fiscal_codigo` used to pre-fill the fiscal territory when creating new clients from foreign countries.

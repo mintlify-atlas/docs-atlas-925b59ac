@@ -1,0 +1,387 @@
+---
+title: "Clients API: Customer Records with Fiscal Data"
+sidebarTitle: "Clients"
+description: "REST API reference for Eme2App clients. Create, update, and manage customer records including NIF, fiscal regime, IRPF, default payment terms, and activation status."
+---
+
+The Clients API manages the customer master record for each company (`empresa`). Every client is scoped to a single `empresa_id` derived from the authenticated user's JWT, so calls across tenants are impossible by design. Clients carry full Spanish fiscal metadata — tax regime (`regimen_fiscal_id`), fiscal territory (`territorio_fiscal_id`), IRPF withholding regime (`regimen_irpf_id`), an optional default payment term, and an optional accounting sub-account (`cuenta_contable_ventas`). The NIF is stored normalised to uppercase and is enforced unique per company at the database level, though the API returns an **advisory** `nif_existente` object instead of blocking the write — see [NIF advisory behaviour](#nif-advisory-behaviour) below.
+
+## Authentication
+
+All endpoints require a valid JWT in the `Authorization` header. The token must belong to an active user with role `admin` or `user` who is linked to an active `empresa`.
+
+```
+Authorization: Bearer <token>
+```
+
+---
+
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/clientes` | List all active clients |
+| `GET` | `/api/clientes/siguiente-codigo` | Get the next available numeric code |
+| `GET` | `/api/clientes/:id` | Get a single client by ID |
+| `POST` | `/api/clientes` | Create a new client |
+| `PUT` | `/api/clientes/:id` | Update an existing client |
+| `PATCH` | `/api/clientes/:id/estado` | Toggle active / inactive status |
+| `DELETE` | `/api/clientes/:id` | Soft-delete a client |
+
+---
+
+## GET /api/clientes
+
+Returns all clients that have `estado = true` (active) for the authenticated company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/clientes \
+  -H "Authorization: Bearer <token>"
+```
+
+### Response
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "a1b2c3d4-...",
+      "nombre": "Acme SL",
+      "nif": "B12345678",
+      "email": "facturacion@acme.es",
+      "telefono": "912345678",
+      "direccion": "Calle Mayor 1",
+      "codigo_postal": "28001",
+      "localidad": "Madrid",
+      "provincia": "Madrid",
+      "regimen_fiscal_id": "...",
+      "territorio_fiscal_id": "...",
+      "regimen_irpf_id": "...",
+      "forma_pago_defecto_id": null,
+      "cuenta_contable_ventas": "430001",
+      "estado": true,
+      "created_at": "2024-01-15T10:00:00.000Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+<ResponseField name="estado" type="string">
+  Always `"exito"` on success.
+</ResponseField>
+
+<ResponseField name="datos" type="array">
+  Array of active client objects.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Count of records returned.
+</ResponseField>
+
+---
+
+## GET /api/clientes/siguiente-codigo
+
+Returns the next sequential numeric code to assign to a new client. The value is read from the `contadores` table for the authenticated company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/clientes/siguiente-codigo \
+  -H "Authorization: Bearer <token>"
+```
+
+### Response
+
+```json
+{
+  "estado": "exito",
+  "datos": { "siguiente": 42 }
+}
+```
+
+<ResponseField name="datos.siguiente" type="number">
+  The next available integer code (current counter value + 1).
+</ResponseField>
+
+---
+
+## GET /api/clientes/:id
+
+Returns a single client record. Returns `404` if the client does not exist or belongs to a different company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/clientes/a1b2c3d4-e5f6-... \
+  -H "Authorization: Bearer <token>"
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the client.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": { "id": "a1b2c3d4-...", "nombre": "Acme SL", ... }
+}
+```
+
+### Response `404`
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Cliente no encontrado"
+}
+```
+
+---
+
+## POST /api/clientes
+
+Creates a new client record for the authenticated company.
+
+```bash
+curl -X POST https://api.eme2app.es/api/clientes \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Acme SL",
+    "nif": "B12345678",
+    "email": "facturacion@acme.es",
+    "telefono": "912345678",
+    "direccion": "Calle Mayor 1",
+    "codigo_postal": "28001",
+    "localidad": "Madrid",
+    "provincia": "Madrid",
+    "regimen_fiscal_id": "uuid-regimen-fiscal",
+    "territorio_fiscal_id": "uuid-territorio",
+    "regimen_irpf_id": "uuid-irpf",
+    "forma_pago_defecto_id": "uuid-forma-pago",
+    "cuenta_contable_ventas": "430001"
+  }'
+```
+
+### Body parameters
+
+<ParamField body="nombre" type="string" required>
+  Full legal name of the client. Whitespace is trimmed automatically.
+</ParamField>
+
+<ParamField body="nif" type="string" required>
+  Tax identification number (NIF/CIF). Stored normalised to uppercase. Unique per `empresa` at the database level; see [NIF advisory behaviour](#nif-advisory-behaviour).
+</ParamField>
+
+<ParamField body="email" type="string">
+  Contact email address. Must pass standard email format validation when provided.
+</ParamField>
+
+<ParamField body="telefono" type="string">
+  Phone number. No format enforcement; whitespace is trimmed.
+</ParamField>
+
+<ParamField body="direccion" type="string">
+  Street address. Max 500 characters.
+</ParamField>
+
+<ParamField body="codigo_postal" type="string">
+  Postal code. Whitespace is trimmed.
+</ParamField>
+
+<ParamField body="localidad" type="string">
+  City / municipality. Whitespace is trimmed.
+</ParamField>
+
+<ParamField body="provincia" type="string">
+  Province. Whitespace is trimmed.
+</ParamField>
+
+<ParamField body="regimen_fiscal_id" type="string" required>
+  UUID of a `regimenes_fiscales` record belonging to the authenticated company (e.g. Régimen General, Régimen Simplificado).
+</ParamField>
+
+<ParamField body="territorio_fiscal_id" type="string" required>
+  UUID of a `territorios_fiscales` record (e.g. Territorio Común, País Vasco, Navarra).
+</ParamField>
+
+<ParamField body="regimen_irpf_id" type="string" required>
+  UUID of a `regimenes_irpf` record. Controls the IRPF withholding percentage applied on invoices.
+</ParamField>
+
+<ParamField body="forma_pago_defecto_id" type="string">
+  UUID of a `formas_pago` record. Must exist, belong to the authenticated company, and have `activo = true`. Returns `400` if the payment term is inactive or not found.
+</ParamField>
+
+<ParamField body="cuenta_contable_ventas" type="string">
+  Sales sub-ledger account code. Max 12 characters. Used when exporting to accounting software.
+</ParamField>
+
+### Response `201`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Cliente creado exitosamente",
+  "datos": { "id": "a1b2c3d4-...", "nombre": "Acme SL", ... }
+}
+```
+
+### NIF advisory behaviour
+
+<Note>
+  The `POST /api/clientes` and `PUT /api/clientes/:id` endpoints **never block a write because of a duplicate NIF**. Instead, if another client record in the same company already holds the same NIF, the response includes an extra `nif_existente` object alongside the newly created or updated record. This lets the frontend surface a warning without failing the operation.
+
+  The `mensaje` is also adjusted to flag the situation:
+
+  ```json
+  {
+    "estado": "exito",
+    "mensaje": "Cliente creado. Ya existía un cliente desactivado con ese NIF.",
+    "datos": { "id": "new-uuid-...", "nombre": "Acme SL", ... },
+    "nif_existente": {
+      "cliente_id": "old-uuid-...",
+      "nombre": "Acme Antigua SL",
+      "activo": false
+    }
+  }
+  ```
+
+  When `nif_existente.activo` is `true` the existing client is still live — the API still succeeds but the frontend should prompt the user to review the conflict.
+</Note>
+
+### Response `400` — inactive payment term
+
+```json
+{
+  "estado": "error",
+  "mensaje": "La forma de pago predefinida debe estar activa"
+}
+```
+
+### Response `400` — validation failure
+
+```json
+{
+  "estado": "error",
+  "mensaje": "El NIF es requerido"
+}
+```
+
+---
+
+## PUT /api/clientes/:id
+
+Full update of an existing client. Accepts the same body fields as `POST`. Returns `404` if the client does not exist in the company scope.
+
+```bash
+curl -X PUT https://api.eme2app.es/api/clientes/a1b2c3d4-e5f6-... \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Acme Solutions SL",
+    "nif": "B12345678",
+    "regimen_fiscal_id": "uuid-regimen-fiscal",
+    "territorio_fiscal_id": "uuid-territorio",
+    "regimen_irpf_id": "uuid-irpf"
+  }'
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the client to update.
+</ParamField>
+
+The request body accepts the same fields as `POST /api/clientes` — all fields validated by the same rule set. The NIF advisory check is also applied: if the incoming NIF differs from the current value and matches another client in the company, a `nif_existente` object is returned in the response.
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Cliente actualizado exitosamente",
+  "datos": { "id": "a1b2c3d4-...", "nombre": "Acme Solutions SL", ... }
+}
+```
+
+---
+
+## PATCH /api/clientes/:id/estado
+
+Toggles the client between active (`true`) and inactive (`false`) without deleting it. Inactive clients are excluded from the `GET /api/clientes` list but can still be referenced by existing invoices.
+
+```bash
+curl -X PATCH https://api.eme2app.es/api/clientes/a1b2c3d4-e5f6-.../estado \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "activo": false }'
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the client.
+</ParamField>
+
+### Body parameters
+
+<ParamField body="activo" type="boolean" required>
+  Pass `true` to activate the client, `false` to deactivate. Any non-boolean value returns a `400` error.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Cliente desactivado",
+  "datos": { "id": "a1b2c3d4-...", "estado": false, ... }
+}
+```
+
+---
+
+## DELETE /api/clientes/:id
+
+Soft-deletes the client. The record is **not physically removed** from the database; the operation is always reversible via `PATCH /:id/estado`. Returns `404` if the client is not found within the company.
+
+```bash
+curl -X DELETE https://api.eme2app.es/api/clientes/a1b2c3d4-e5f6-... \
+  -H "Authorization: Bearer <token>"
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the client to delete.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Cliente eliminado exitosamente",
+  "datos": { "id": "a1b2c3d4-...", ... }
+}
+```
+
+<Tip>
+  Because this is a soft-delete, existing invoices and budget documents that reference the client remain intact and continue to display the client's name and fiscal data correctly.
+</Tip>
+
+---
+
+## Error reference
+
+| HTTP status | `estado` | Typical `mensaje` |
+|-------------|----------|-------------------|
+| `400` | `error` | Validation error detail (e.g. `"El nombre es requerido"`) |
+| `400` | `error` | `"La forma de pago predefinida debe estar activa"` |
+| `400` | `error` | `"El campo activo debe ser booleano"` |
+| `404` | `error` | `"Cliente no encontrado"` |
+| `500` | `error` | Internal server error message |

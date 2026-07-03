@@ -1,0 +1,367 @@
+---
+title: "Suppliers API: Vendor Records and Contact Data"
+sidebarTitle: "Suppliers"
+description: "REST API reference for Eme2App suppliers (proveedores). Create and manage vendor records used when recording expenses and purchase invoices."
+---
+
+The Suppliers API manages the vendor master for each company. Suppliers (`proveedores`) are the counterpart to clients: they appear as the payer on expense records (`gastos`) and purchase invoices. Like clients, every supplier is fully scoped to the authenticated company's `empresa_id` and carries fiscal data including a fiscal territory (`territorio_fiscal_id`), an optional country (`pais_id`), and an optional purchase accounting sub-account (`cuenta_contable_compras`). The NIF is unique per company, and the API applies the same non-blocking **advisory** `nif_existente` pattern used by the Clients API.
+
+## Authentication
+
+All endpoints require a valid JWT in the `Authorization` header. The token must belong to an active user with role `admin` or `user` linked to an active `empresa`.
+
+```
+Authorization: Bearer <token>
+```
+
+---
+
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/proveedores` | List all suppliers |
+| `GET` | `/api/proveedores/siguiente-codigo` | Get the next available numeric code |
+| `GET` | `/api/proveedores/:id` | Get a single supplier by ID |
+| `POST` | `/api/proveedores` | Create a new supplier |
+| `PUT` | `/api/proveedores/:id` | Update an existing supplier |
+| `PATCH` | `/api/proveedores/:id/estado` | Toggle active / inactive status |
+| `DELETE` | `/api/proveedores/:id` | Soft-delete a supplier |
+
+---
+
+## GET /api/proveedores
+
+Returns all supplier records for the authenticated company. Unlike clients, the list endpoint does not filter by `estado` at the route level — filtering behaviour follows the underlying repository query.
+
+```bash
+curl -X GET https://api.eme2app.es/api/proveedores \
+  -H "Authorization: Bearer <token>"
+```
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "f1e2d3c4-...",
+      "nombre": "Suministros Norte SL",
+      "nif": "B98765432",
+      "email": "pedidos@suministrosnorte.es",
+      "telefono": "944123456",
+      "direccion": "Polígono Industrial 5",
+      "codigo_postal": "48003",
+      "localidad": "Bilbao",
+      "provincia": "Vizcaya",
+      "territorio_fiscal_id": "uuid-territorio",
+      "pais_id": null,
+      "cuenta_contable_compras": "400001",
+      "codigo_numerico": 1,
+      "estado": true,
+      "created_at": "2024-03-01T08:00:00.000Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+<ResponseField name="estado" type="string">
+  Always `"exito"` on success.
+</ResponseField>
+
+<ResponseField name="datos" type="array">
+  Array of supplier objects.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Count of records returned.
+</ResponseField>
+
+---
+
+## GET /api/proveedores/siguiente-codigo
+
+Returns the next sequential numeric code to assign to a new supplier, read from the `contadores` table for the authenticated company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/proveedores/siguiente-codigo \
+  -H "Authorization: Bearer <token>"
+```
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": { "siguiente": 15 }
+}
+```
+
+<ResponseField name="datos.siguiente" type="number">
+  The next available integer code (current counter value + 1).
+</ResponseField>
+
+---
+
+## GET /api/proveedores/:id
+
+Returns a single supplier. Returns `404` if the record does not exist or belongs to a different company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/proveedores/f1e2d3c4-... \
+  -H "Authorization: Bearer <token>"
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the supplier.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": { "id": "f1e2d3c4-...", "nombre": "Suministros Norte SL", ... }
+}
+```
+
+### Response `404`
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Proveedor no encontrado"
+}
+```
+
+---
+
+## POST /api/proveedores
+
+Creates a new supplier for the authenticated company.
+
+```bash
+curl -X POST https://api.eme2app.es/api/proveedores \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Suministros Norte SL",
+    "nif": "B98765432",
+    "email": "pedidos@suministrosnorte.es",
+    "telefono": "944123456",
+    "direccion": "Polígono Industrial 5",
+    "codigo_postal": "48003",
+    "localidad": "Bilbao",
+    "provincia": "Vizcaya",
+    "territorio_fiscal_id": "uuid-territorio",
+    "cuenta_contable_compras": "400001"
+  }'
+```
+
+### Body parameters
+
+<ParamField body="nombre" type="string" required>
+  Full legal name of the supplier. Whitespace is trimmed automatically.
+</ParamField>
+
+<ParamField body="nif" type="string" required>
+  Tax identification number. Stored normalised to uppercase. Unique per `empresa` at the database level (`ux_proveedores_empresa_nif`). See [NIF advisory behaviour](#nif-advisory-behaviour).
+</ParamField>
+
+<ParamField body="territorio_fiscal_id" type="string" required>
+  UUID of a `territorios_fiscales` record (e.g. Territorio Común, País Vasco, Navarra). Must belong to the authenticated company.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Contact email address. Must pass standard email format validation when provided.
+</ParamField>
+
+<ParamField body="telefono" type="string">
+  Phone number. Max 20 characters; whitespace is trimmed.
+</ParamField>
+
+<ParamField body="direccion" type="string">
+  Street address. Max 500 characters.
+</ParamField>
+
+<ParamField body="codigo_postal" type="string">
+  Postal code. Max 10 characters; whitespace is trimmed.
+</ParamField>
+
+<ParamField body="localidad" type="string">
+  City / municipality. Max 255 characters; whitespace is trimmed.
+</ParamField>
+
+<ParamField body="provincia" type="string">
+  Province. Max 255 characters; whitespace is trimmed.
+</ParamField>
+
+<ParamField body="pais_id" type="string">
+  UUID of a `paises` record. Used for intra-EU and international suppliers to set the correct fiscal treatment.
+</ParamField>
+
+<ParamField body="cuenta_contable_compras" type="string">
+  Purchase sub-ledger account code. Max 12 characters.
+</ParamField>
+
+### Response `201`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Proveedor creado exitosamente",
+  "datos": {
+    "id": "f1e2d3c4-...",
+    "nombre": "Suministros Norte SL",
+    "nif": "B98765432",
+    ...
+  }
+}
+```
+
+### NIF advisory behaviour
+
+<Note>
+  Like the Clients API, creating or updating a supplier **never fails** solely because of a duplicate NIF within the same company. When another supplier record already holds the same NIF, the response includes a `nif_existente` advisory object alongside the written record.
+
+  ```json
+  {
+    "estado": "exito",
+    "mensaje": "Proveedor creado. Ya existía un proveedor desactivado con ese NIF.",
+    "datos": { "id": "new-uuid-...", ... },
+    "nif_existente": {
+      "proveedor_id": "old-uuid-...",
+      "nombre": "Suministros Norte Antigua SL",
+      "activo": false
+    }
+  }
+  ```
+
+  When `nif_existente.activo` is `true` the conflicting supplier is still active; the frontend should warn the user to verify the correct record.
+</Note>
+
+### Response `400` — validation failure
+
+```json
+{
+  "estado": "error",
+  "mensaje": "El territorio fiscal es requerido"
+}
+```
+
+---
+
+## PUT /api/proveedores/:id
+
+Full update of an existing supplier. Accepts the same body fields as `POST`. Returns `404` if the supplier does not exist in the company scope.
+
+```bash
+curl -X PUT https://api.eme2app.es/api/proveedores/f1e2d3c4-... \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Suministros Norte Group SL",
+    "nif": "B98765432",
+    "territorio_fiscal_id": "uuid-territorio",
+    "email": "contabilidad@suministrosnorte.es"
+  }'
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the supplier to update.
+</ParamField>
+
+The body accepts all the same fields as `POST /api/proveedores`. The NIF advisory check is applied when the incoming NIF differs from the current stored value.
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Proveedor actualizado exitosamente",
+  "datos": { "id": "f1e2d3c4-...", "nombre": "Suministros Norte Group SL", ... }
+}
+```
+
+---
+
+## PATCH /api/proveedores/:id/estado
+
+Toggles the supplier between active and inactive. Inactive suppliers are hidden from lookup selectors in expense recording but continue to appear on historical expense records.
+
+```bash
+curl -X PATCH https://api.eme2app.es/api/proveedores/f1e2d3c4-.../estado \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "activo": false }'
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the supplier.
+</ParamField>
+
+### Body parameters
+
+<ParamField body="activo" type="boolean" required>
+  `true` to activate the supplier, `false` to deactivate. Passing any non-boolean value returns a `400` error.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Proveedor desactivado",
+  "datos": { "id": "f1e2d3c4-...", "estado": false, ... }
+}
+```
+
+---
+
+## DELETE /api/proveedores/:id
+
+Soft-deletes the supplier. The record remains in the database and can be re-activated via `PATCH /:id/estado`. Returns `404` if the supplier is not found within the company.
+
+```bash
+curl -X DELETE https://api.eme2app.es/api/proveedores/f1e2d3c4-... \
+  -H "Authorization: Bearer <token>"
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the supplier to delete.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Proveedor eliminado exitosamente",
+  "datos": { "id": "f1e2d3c4-...", ... }
+}
+```
+
+<Tip>
+  Deleting a supplier does not remove it from existing `gastos` (expense) records. Historical expenses continue to display the supplier's name correctly even after the supplier is soft-deleted.
+</Tip>
+
+---
+
+## Error reference
+
+| HTTP status | `estado` | Typical `mensaje` |
+|-------------|----------|-------------------|
+| `400` | `error` | Validation error detail (e.g. `"El NIF es requerido"`) |
+| `400` | `error` | `"El campo activo debe ser booleano"` |
+| `404` | `error` | `"Proveedor no encontrado"` |
+| `500` | `error` | Internal server error message |

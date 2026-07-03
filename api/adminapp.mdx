@@ -1,0 +1,947 @@
+---
+title: "Admin App API: Superadmin Multi-Company Management"
+sidebarTitle: "Admin App"
+description: "REST API reference for Eme2App superadmin operations. Manage companies, cross-company users, user-company assignments, system email config, and AEAT certificates."
+---
+
+The Admin App API is the control plane for the entire Eme2App installation. Unlike the per-company [Users API](/api/users) — which operates inside a single tenant — every endpoint here works across all companies simultaneously. Through these routes a superadmin can create and delete companies, provision users globally, manage which users belong to which companies, configure the platform's outbound email infrastructure, and upload the AEAT digital certificate used for tax-authority integrations. Because these operations cross tenant boundaries they are not subject to the `empresa_id` scope that governs all other API calls.
+
+<Warning>
+  Every endpoint under `/api/adminapp` requires a Bearer token whose `rol` claim is `"superadmin"`. Regular `admin` or `user` tokens will receive **403 Forbidden** on all routes. There is no elevated-privilege escalation path from a company admin account.
+</Warning>
+
+---
+
+## Authentication
+
+```
+Authorization: Bearer <superadmin-token>
+```
+
+The `superadmin` token is issued by the standard login endpoint. Superadmin tokens do **not** carry an `empresa_id` claim — that claim is intentionally absent, because superadmin operations are cross-company by design.
+
+---
+
+## Companies
+
+Manage the `empresa` records that represent individual customer tenants. Creating a company automatically seeds the platform's menu items (`menu_items`) for that tenant. Optionally, the product catalogue can be seeded by copying it from an existing company.
+
+### GET /api/adminapp/empresas
+
+List all companies registered in the platform.
+
+```bash
+curl -X GET https://app.eme2app.com/api/adminapp/empresas \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "a1b2c3d4-1234-5678-abcd-ef0123456789",
+      "nombre": "Construcciones Pérez S.L.",
+      "nombre_comercial": "Pérez Obras",
+      "email": "info@perezobras.es",
+      "nif": "B12345678",
+      "estado": true,
+      "created_at": "2024-01-10T08:00:00.000Z"
+    }
+  ]
+}
+```
+
+<ResponseField name="estado" type="string">
+  `"exito"` on success.
+</ResponseField>
+
+<ResponseField name="datos" type="array">
+  Array of all company objects in the platform.
+</ResponseField>
+
+---
+
+### GET /api/adminapp/empresas/:id
+
+Retrieve a single company by its UUID.
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the company.
+</ParamField>
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "id": "a1b2c3d4-1234-5678-abcd-ef0123456789",
+    "nombre": "Construcciones Pérez S.L.",
+    "nombre_comercial": "Pérez Obras",
+    "email": "info@perezobras.es",
+    "nif": "B12345678",
+    "estado": true,
+    "created_at": "2024-01-10T08:00:00.000Z"
+  }
+}
+```
+
+**Error `404 Not Found`**
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Empresa no encontrada"
+}
+```
+
+---
+
+### POST /api/adminapp/empresas
+
+Create a new company. After creation, the platform automatically seeds the default menu items for the new tenant and assigns the calling superadmin to it via `usuario_empresas`. Pass `sembrar_catalogo: true` together with an `empresa_origen` UUID to copy the product/service catalogue from an existing company.
+
+#### Request body
+
+<ParamField body="nombre" type="string" required>
+  Legal name of the company. Maximum 255 characters.
+</ParamField>
+
+<ParamField body="nombre_comercial" type="string">
+  Trade name or brand name. Maximum 255 characters. Optional.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Contact email address for the company. Must be a valid email format when provided.
+</ParamField>
+
+<ParamField body="nif" type="string">
+  Spanish tax identification number (NIF/CIF). Maximum 20 characters. Must be unique across the platform when provided.
+</ParamField>
+
+<ParamField body="sembrar_catalogo" type="boolean">
+  When `true`, copies articles, IVA types and other catalogue records from the company specified in `empresa_origen`. Requires `empresa_origen` to be set.
+</ParamField>
+
+<ParamField body="empresa_origen" type="string">
+  UUID of the source company to copy the catalogue from. Required when `sembrar_catalogo` is `true`.
+</ParamField>
+
+```bash
+curl -X POST https://app.eme2app.com/api/adminapp/empresas \
+  -H "Authorization: Bearer <superadmin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Fontanería López S.L.",
+    "nombre_comercial": "López Fontanería",
+    "email": "contacto@lopezfontaneria.es",
+    "nif": "B87654321"
+  }'
+```
+
+**Response `201 Created`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Empresa creada correctamente",
+  "datos": {
+    "id": "c3d4e5f6-...",
+    "nombre": "Fontanería López S.L.",
+    "nombre_comercial": "López Fontanería",
+    "email": "contacto@lopezfontaneria.es",
+    "nif": "B87654321",
+    "estado": true,
+    "created_at": "2024-07-12T10:00:00.000Z"
+  }
+}
+```
+
+---
+
+### PUT /api/adminapp/empresas/:id
+
+Update an existing company's core fields. The same validation rules as `POST` apply to each field.
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the company to update.
+</ParamField>
+
+#### Request body
+
+<ParamField body="nombre" type="string" required>
+  Updated legal name. Maximum 255 characters.
+</ParamField>
+
+<ParamField body="nombre_comercial" type="string">
+  Updated trade name. Maximum 255 characters.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Updated contact email. Must be valid format when provided.
+</ParamField>
+
+<ParamField body="nif" type="string">
+  Updated NIF/CIF. Maximum 20 characters.
+</ParamField>
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Empresa actualizada correctamente",
+  "datos": { "...": "updated company object" }
+}
+```
+
+---
+
+### PATCH /api/adminapp/empresas/:id/toggle-estado
+
+Toggle a company between active (`estado: true`) and inactive (`estado: false`). Inactive companies cannot be used by their assigned users for normal operations.
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the company.
+</ParamField>
+
+```bash
+curl -X PATCH https://app.eme2app.com/api/adminapp/empresas/a1b2c3d4-.../toggle-estado \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Empresa desactivada correctamente",
+  "datos": {
+    "id": "a1b2c3d4-...",
+    "estado": false
+  }
+}
+```
+
+<Note>
+  The `mensaje` reflects the new state: `"Empresa activada correctamente"` or `"Empresa desactivada correctamente"`.
+</Note>
+
+---
+
+### DELETE /api/adminapp/empresas/:id
+
+Permanently delete a company and **all of its associated data**. This is a destructive hard delete that cascades through invoices, budgets, clients, articles, and all other records belonging to the tenant.
+
+<Warning>
+  This operation is **irreversible**. All company data — invoices, clients, articles, payment methods, users, and assignments — is permanently removed. There is no recycle bin or undo.
+</Warning>
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the company to delete.
+</ParamField>
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Empresa y todos sus datos eliminados correctamente"
+}
+```
+
+---
+
+## Users (cross-company)
+
+These endpoints manage user accounts at the platform level, independent of any single company. A user created here exists globally; use the [user-company assignment endpoints](#user-company-assignments) to grant them access to one or more companies.
+
+### GET /api/adminapp/usuarios
+
+List all users across the entire platform, regardless of company.
+
+```bash
+curl -X GET https://app.eme2app.com/api/adminapp/usuarios \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "d4e5f6a7-...",
+      "email": "ana@empresa.com",
+      "nombre": "Ana Rodríguez",
+      "rol": "user",
+      "estado": true,
+      "created_at": "2024-02-01T09:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+### POST /api/adminapp/usuarios
+
+Create a new user at the platform level and assign them to a company in a single request. If a user with the given email already exists, the creation step is skipped and the user is assigned to the specified company (if not already assigned). `empresa_id` is required at creation time.
+
+#### Request body
+
+<ParamField body="email" type="string" required>
+  Valid email address. If this email is already registered, no new user is created — instead the existing user is assigned to `empresa_id`.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password, minimum 6 characters. Stored as a bcrypt hash.
+</ParamField>
+
+<ParamField body="nombre" type="string" required>
+  Display name. Maximum 255 characters.
+</ParamField>
+
+<ParamField body="rol" type="string" required>
+  Role for this user. Accepted values: `"admin"` or `"user"`. Superadmin accounts cannot be created through this endpoint.
+</ParamField>
+
+<ParamField body="empresa_id" type="string" required>
+  UUID of the company to assign the user to. Required — a user cannot be created without an initial company assignment.
+</ParamField>
+
+```bash
+curl -X POST https://app.eme2app.com/api/adminapp/usuarios \
+  -H "Authorization: Bearer <superadmin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "carlos@empresa.com",
+    "password": "pass123",
+    "nombre": "Carlos Sánchez",
+    "rol": "user",
+    "empresa_id": "a1b2c3d4-1234-5678-abcd-ef0123456789"
+  }'
+```
+
+**Response `201 Created`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Usuario creado y asignado a la empresa correctamente",
+  "datos": {
+    "id": "e5f6a7b8-...",
+    "email": "carlos@empresa.com",
+    "nombre": "Carlos Sánchez",
+    "rol": "user",
+    "estado": true
+  }
+}
+```
+
+<Note>
+  The `mensaje` varies depending on what happened: `"Usuario creado y asignado a la empresa correctamente"`, `"Usuario existente asignado a la empresa correctamente"`, or `"Usuario creado correctamente"`.
+</Note>
+
+---
+
+### PUT /api/adminapp/usuarios/:id
+
+Update a user's profile fields at the platform level. If a new email is provided it must not already be in use by another account.
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the user to update.
+</ParamField>
+
+#### Request body
+
+All fields are optional.
+
+<ParamField body="email" type="string">
+  New email address. Must be valid and unique.
+</ParamField>
+
+<ParamField body="nombre" type="string">
+  Updated display name. Maximum 255 characters.
+</ParamField>
+
+<ParamField body="rol" type="string">
+  Updated role. Accepted values: `"admin"` or `"user"`.
+</ParamField>
+
+<ParamField body="password" type="string">
+  New password. Minimum 6 characters.
+</ParamField>
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Usuario actualizado correctamente",
+  "datos": { "...": "updated user object" }
+}
+```
+
+---
+
+### PATCH /api/adminapp/usuarios/:id/toggle-estado
+
+Toggle a user's active state across the entire platform. A deactivated user cannot log in to any of their assigned companies.
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the user.
+</ParamField>
+
+```bash
+curl -X PATCH https://app.eme2app.com/api/adminapp/usuarios/e5f6a7b8-.../toggle-estado \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Usuario desactivado correctamente",
+  "datos": {
+    "id": "e5f6a7b8-...",
+    "estado": false
+  }
+}
+```
+
+---
+
+## User-Company Assignments
+
+The `usuario_empresas` table is the join between users and companies. A single user can be assigned to multiple companies; toggling between them at login issues a new JWT with the selected `empresa_id`. These endpoints let you manage those assignments independently of user creation.
+
+### GET /api/adminapp/usuario-empresas
+
+List all user-company assignment records across the platform.
+
+```bash
+curl -X GET https://app.eme2app.com/api/adminapp/usuario-empresas \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "f6a7b8c9-...",
+      "usuario_id": "d4e5f6a7-...",
+      "empresa_id": "a1b2c3d4-...",
+      "created_at": "2024-03-15T11:00:00.000Z"
+    }
+  ]
+}
+```
+
+<ResponseField name="datos[].id" type="string">
+  UUID of the assignment record. Use this value with `DELETE /api/adminapp/usuario-empresas/:id`.
+</ResponseField>
+
+<ResponseField name="datos[].usuario_id" type="string">
+  UUID of the user.
+</ResponseField>
+
+<ResponseField name="datos[].empresa_id" type="string">
+  UUID of the company.
+</ResponseField>
+
+---
+
+### POST /api/adminapp/usuario-empresas
+
+Assign an existing user to an existing company. The combination of `usuario_id` + `empresa_id` must be unique; duplicate assignments return `400 Bad Request`.
+
+#### Request body
+
+<ParamField body="usuario_id" type="string" required>
+  UUID of the user to assign.
+</ParamField>
+
+<ParamField body="empresa_id" type="string" required>
+  UUID of the company to assign the user to.
+</ParamField>
+
+```bash
+curl -X POST https://app.eme2app.com/api/adminapp/usuario-empresas \
+  -H "Authorization: Bearer <superadmin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "usuario_id": "d4e5f6a7-...",
+    "empresa_id": "c3d4e5f6-..."
+  }'
+```
+
+**Response `201 Created`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Empresa asignada al usuario correctamente",
+  "datos": {
+    "id": "g7h8i9j0-...",
+    "usuario_id": "d4e5f6a7-...",
+    "empresa_id": "c3d4e5f6-...",
+    "created_at": "2024-07-12T14:30:00.000Z"
+  }
+}
+```
+
+**Error `400 Bad Request`** — duplicate assignment:
+
+```json
+{
+  "estado": "error",
+  "mensaje": "El usuario ya tiene asignada esa empresa"
+}
+```
+
+---
+
+### DELETE /api/adminapp/usuario-empresas/:id
+
+Remove a user-company assignment by its assignment record UUID. The user and company themselves are not deleted; only the link between them is removed. After this, the user will not be able to log in to that company.
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the `usuario_empresas` assignment record (not the user or company UUID).
+</ParamField>
+
+```bash
+curl -X DELETE https://app.eme2app.com/api/adminapp/usuario-empresas/f6a7b8c9-... \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Asignación eliminada correctamente"
+}
+```
+
+---
+
+## System Configuration
+
+Platform-wide email (SMTP) settings used when the system sends notifications on behalf of Eme2App itself — for example, password-reset emails. These settings are separate from the per-company SMTP configuration stored on each `empresa` record.
+
+### GET /api/adminapp/config-sistema
+
+Retrieve the current system-level email configuration.
+
+```bash
+curl -X GET https://app.eme2app.com/api/adminapp/config-sistema \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "smtp_provider": "gmail",
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587,
+    "smtp_secure": false,
+    "smtp_user": "noreply@eme2app.com",
+    "email_from": "Eme2App <noreply@eme2app.com>",
+    "aeat_cert_pem": null
+  }
+}
+```
+
+<ResponseField name="datos.smtp_provider" type="string | null">
+  SMTP provider preset. Accepted values: `"gmail"`, `"outlook"`, `"brevo"`, `"custom"`.
+</ResponseField>
+
+<ResponseField name="datos.smtp_host" type="string | null">
+  SMTP server hostname. Used when `smtp_provider` is `"custom"`.
+</ResponseField>
+
+<ResponseField name="datos.smtp_port" type="integer | null">
+  SMTP port number (1–65535).
+</ResponseField>
+
+<ResponseField name="datos.smtp_secure" type="boolean">
+  `true` = use TLS (port 465); `false` = use STARTTLS (port 587).
+</ResponseField>
+
+<ResponseField name="datos.smtp_user" type="string | null">
+  SMTP authentication username (email format).
+</ResponseField>
+
+<ResponseField name="datos.email_from" type="string | null">
+  Sender display string used in the `From:` header.
+</ResponseField>
+
+<ResponseField name="datos.aeat_cert_pem" type="string | null">
+  PEM-encoded content of the app-level AEAT certificate, or `null` if none is loaded.
+</ResponseField>
+
+---
+
+### PUT /api/adminapp/config-sistema
+
+Save updated system email configuration. Only the fields you include are updated.
+
+#### Request body
+
+<ParamField body="smtp_provider" type="string">
+  SMTP provider preset. Accepted values: `"gmail"`, `"outlook"`, `"brevo"`, `"custom"`, or `""` (empty string to clear).
+</ParamField>
+
+<ParamField body="smtp_host" type="string">
+  SMTP server hostname for custom provider configurations.
+</ParamField>
+
+<ParamField body="smtp_port" type="integer">
+  SMTP port. Must be between 1 and 65535.
+</ParamField>
+
+<ParamField body="smtp_secure" type="boolean">
+  Use TLS (`true`) or STARTTLS (`false`).
+</ParamField>
+
+<ParamField body="smtp_user" type="string">
+  SMTP username. Must be a valid email format when provided.
+</ParamField>
+
+<ParamField body="smtp_pass" type="string">
+  SMTP password or app password. Stored encrypted at rest.
+</ParamField>
+
+<ParamField body="email_from" type="string">
+  Sender display string, e.g. `"Eme2App <noreply@eme2app.com>"`.
+</ParamField>
+
+```bash
+curl -X PUT https://app.eme2app.com/api/adminapp/config-sistema \
+  -H "Authorization: Bearer <superadmin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "smtp_provider": "gmail",
+    "smtp_port": 587,
+    "smtp_secure": false,
+    "smtp_user": "noreply@eme2app.com",
+    "smtp_pass": "app-password-here",
+    "email_from": "Eme2App <noreply@eme2app.com>"
+  }'
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Configuración guardada",
+  "datos": { "...": "updated config object" }
+}
+```
+
+---
+
+### POST /api/adminapp/config-sistema/probar
+
+Send a test email using the currently saved system configuration. Use this to verify SMTP credentials before relying on them for production traffic.
+
+#### Request body
+
+<ParamField body="email" type="string" required>
+  Destination email address for the test message. Must be a valid email format.
+</ParamField>
+
+```bash
+curl -X POST https://app.eme2app.com/api/adminapp/config-sistema/probar \
+  -H "Authorization: Bearer <superadmin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "admin@eme2app.com" }'
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Email de prueba enviado a admin@eme2app.com"
+}
+```
+
+**Error `400 Bad Request`** — SMTP delivery failure:
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Error al enviar el email: Invalid login: 535 Authentication failed"
+}
+```
+
+---
+
+## AEAT App-Level Certificate
+
+Eme2App integrates with the Spanish Tax Agency (AEAT) for digital invoice submission and NIF validation. The app-level certificate acts as a fallback when a company has not uploaded its own certificate. The PFX/P12 file is converted to PEM format on the server and stored encrypted in the system configuration record.
+
+### POST /api/adminapp/certificado-aeat
+
+Upload an app-level AEAT certificate in PFX or P12 format. The file is sent as `multipart/form-data`. Maximum file size is **5 MB**.
+
+<Warning>
+  Uploading a new certificate overwrites the previously stored one immediately. Download a backup copy of the current certificate before replacing it.
+</Warning>
+
+#### Request body (`multipart/form-data`)
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `certificado` | File | Yes | PFX or P12 certificate file. Must have `.pfx` or `.p12` extension. |
+| `passphrase` | String | No | Password protecting the PFX/P12 file. Leave empty if the file has no password. |
+
+```bash
+curl -X POST https://app.eme2app.com/api/adminapp/certificado-aeat \
+  -H "Authorization: Bearer <superadmin-token>" \
+  -F "certificado=@/path/to/certificado.pfx" \
+  -F "passphrase=mi_contraseña_certificado"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Certificado AEAT de aplicación guardado correctamente"
+}
+```
+
+**Error `400 Bad Request`** — no file, wrong extension, or bad passphrase:
+
+```json
+{
+  "estado": "error",
+  "mensaje": "El archivo debe tener extensión .pfx o .p12"
+}
+```
+
+---
+
+### DELETE /api/adminapp/certificado-aeat
+
+Remove the app-level AEAT certificate. Both the PEM content and the passphrase are cleared from the system configuration. After this, AEAT features that rely on a certificate will fail unless individual companies have their own certificates uploaded.
+
+```bash
+curl -X DELETE https://app.eme2app.com/api/adminapp/certificado-aeat \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Certificado AEAT de aplicación eliminado"
+}
+```
+
+---
+
+## Fiscal Advisory Applications
+
+Advisory apps (`aplicaciones_asesoria`) represent third-party accounting or fiscal management software integrations. Each app record includes an export key that acts as a shared secret for data-exchange operations between Eme2App and the advisory platform.
+
+### GET /api/adminapp/aplicaciones-asesoria
+
+List all configured fiscal advisory application integrations.
+
+```bash
+curl -X GET https://app.eme2app.com/api/adminapp/aplicaciones-asesoria \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "h8i9j0k1-...",
+      "nombre": "Contasol Online",
+      "clave_exportacion": "CTSOL2024",
+      "created_at": "2024-04-01T08:00:00.000Z"
+    }
+  ]
+}
+```
+
+<ResponseField name="datos[].id" type="string">
+  UUID of the advisory app record.
+</ResponseField>
+
+<ResponseField name="datos[].nombre" type="string">
+  Display name of the advisory application.
+</ResponseField>
+
+<ResponseField name="datos[].clave_exportacion" type="string">
+  Export key (shared secret) used when exchanging data with this advisory app. Maximum 20 characters.
+</ResponseField>
+
+---
+
+### POST /api/adminapp/aplicaciones-asesoria
+
+Register a new fiscal advisory application.
+
+#### Request body
+
+<ParamField body="nombre" type="string" required>
+  Display name for the advisory application. Must not be empty.
+</ParamField>
+
+<ParamField body="clave_exportacion" type="string" required>
+  Export key / shared secret. Must not be empty. Maximum 20 characters.
+</ParamField>
+
+```bash
+curl -X POST https://app.eme2app.com/api/adminapp/aplicaciones-asesoria \
+  -H "Authorization: Bearer <superadmin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Contasol Online",
+    "clave_exportacion": "CTSOL2024"
+  }'
+```
+
+**Response `201 Created`**
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "id": "h8i9j0k1-...",
+    "nombre": "Contasol Online",
+    "clave_exportacion": "CTSOL2024",
+    "created_at": "2024-07-12T15:00:00.000Z"
+  }
+}
+```
+
+---
+
+### PUT /api/adminapp/aplicaciones-asesoria/:id
+
+Update an existing advisory application's name or export key.
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the advisory app record to update.
+</ParamField>
+
+#### Request body
+
+<ParamField body="nombre" type="string" required>
+  Updated display name.
+</ParamField>
+
+<ParamField body="clave_exportacion" type="string" required>
+  Updated export key. Maximum 20 characters.
+</ParamField>
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "datos": { "...": "updated advisory app object" }
+}
+```
+
+---
+
+### DELETE /api/adminapp/aplicaciones-asesoria/:id
+
+Delete an advisory application integration record.
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the advisory app record to delete.
+</ParamField>
+
+```bash
+curl -X DELETE https://app.eme2app.com/api/adminapp/aplicaciones-asesoria/h8i9j0k1-... \
+  -H "Authorization: Bearer <superadmin-token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Aplicación eliminada"
+}
+```
+
+---
+
+## Error response shape
+
+All error responses follow the standard envelope:
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Human-readable description"
+}
+```
+
+Validation errors produced by `express-validator` include an `errores` array:
+
+```json
+{
+  "estado": "error",
+  "errores": [
+    {
+      "type": "field",
+      "msg": "El nombre es requerido",
+      "path": "nombre",
+      "location": "body"
+    }
+  ]
+}
+```
+
+| HTTP status | Scenario |
+|---|---|
+| `400` | Validation failure, duplicate record, or bad input |
+| `401` | Missing or expired Bearer token |
+| `403` | Valid token but role is not `superadmin` |
+| `404` | Requested company or user not found |
+| `500` | Unexpected server-side error |

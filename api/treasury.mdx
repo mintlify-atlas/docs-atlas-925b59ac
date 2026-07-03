@@ -1,0 +1,333 @@
+---
+title: "Treasury API: Due Dates, Collections, and Cash Flow"
+sidebarTitle: "Treasury"
+description: "REST API for Eme2App treasury. List and filter due dates, register and revert collections, group vencimientos, and retrieve cash-flow summaries."
+---
+
+The Treasury API provides a cross-invoice view of all `facturas_vencimientos` (due-date instalments) for the active company. Where the Invoices API manages vencimientos in the context of a single factura, Tesorería operates globally — letting finance teams see all pending, overdue, and collected amounts in one place, group disparate vencimientos from multiple invoices into a single instalment for bank remittance, and register or revert collections without leaving the treasury screen. All endpoints require a Bearer token with a valid `empresa_id`.
+
+**Base path:** `/api/tesoreria`
+
+**Authorization:** `Authorization: Bearer <token>` with `empresa_id` embedded.
+
+---
+
+## Endpoint reference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/tesoreria/resumen` | Cash-flow summary (pending, collected, overdue) |
+| GET | `/api/tesoreria/vencimientos` | List due dates with filters |
+| PATCH | `/api/tesoreria/vencimientos/:id` | Inline-update a due date |
+| POST | `/api/tesoreria/cobros` | Register a collection against a vencimiento |
+| POST | `/api/tesoreria/vencimientos/:id/revertir-cobro` | Revert a collection on a vencimiento |
+| POST | `/api/tesoreria/cobros/agrupar` | Group vencimientos into a combined instalment |
+| GET | `/api/tesoreria/vencimientos/:id/hijos` | List child vencimientos of an agrupador |
+| POST | `/api/tesoreria/vencimientos/:id/desagrupar` | Dissolve a grouped vencimiento |
+
+---
+
+## GET /api/tesoreria/resumen
+
+Returns a high-level cash-flow summary for the active company: total amounts pending, collected, and overdue across all confirmed invoices.
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "pendiente": "4820.00",
+    "cobrado": "12350.50",
+    "vencido": "1100.00",
+    "total": "18270.50"
+  }
+}
+```
+
+<ResponseField name="datos.pendiente" type="decimal">
+  Sum of all vencimientos in `pending` state whose `fecha_vencimiento` is today or in the future.
+</ResponseField>
+
+<ResponseField name="datos.cobrado" type="decimal">
+  Sum of all vencimientos in `cobrado` state.
+</ResponseField>
+
+<ResponseField name="datos.vencido" type="decimal">
+  Sum of all vencimientos in `pending` or `partial` state whose `fecha_vencimiento` is in the past (overdue).
+</ResponseField>
+
+<ResponseField name="datos.total" type="decimal">
+  Grand total across all states (`pendiente + cobrado + vencido + partial`).
+</ResponseField>
+
+**curl example**
+
+```bash
+curl -s https://api.eme2app.com/api/tesoreria/resumen \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## GET /api/tesoreria/vencimientos
+
+Returns the full list of due-date instalments for the active company. Supports multiple simultaneous filters.
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `fecha_desde` | YYYY-MM-DD | Return vencimientos with `fecha_vencimiento` ≥ this date. |
+| `fecha_hasta` | YYYY-MM-DD | Return vencimientos with `fecha_vencimiento` ≤ this date. |
+| `estado_vencimiento` | string | Filter by vencimiento state: `pending`, `partial`, `cobrado`, `overdue`. |
+| `estado_factura` | string | Filter by the parent invoice state: `borrador`, `confirmada`, `anulada`. |
+| `cliente_id` | UUID | Restrict to a single client's vencimientos. |
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "uuid-vencimiento",
+      "factura_id": "uuid-factura",
+      "cliente_id": "uuid-cliente",
+      "numero_cuota": 1,
+      "importe": "1210.00",
+      "fecha_vencimiento": "2024-04-30",
+      "estado": "pending",
+      "instrumento_id": "uuid-instrumento",
+      "agrupador_id": null,
+      "notas": null
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+## PATCH /api/tesoreria/vencimientos/:id
+
+Inline-updates a single vencimiento. Only `pending` vencimientos can be edited. If the vencimiento already has a cobro, only `fecha_vencimiento`, `notas`, and `instrumento_id` may be changed — the `importe` is locked to the cobro amount.
+
+<ParamField body="importe" type="decimal">
+  New instalment amount. Blocked if the vencimiento has an existing cobro.
+</ParamField>
+
+<ParamField body="fecha_vencimiento" type="string (YYYY-MM-DD)">
+  New due date.
+</ParamField>
+
+<ParamField body="instrumento_id" type="string (UUID)">
+  Replacement payment instrument.
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Updated internal note.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "id": "uuid-vencimiento",
+    "importe": "1210.00",
+    "fecha_vencimiento": "2024-05-15",
+    "estado": "pending",
+    "instrumento_id": "uuid-instrumento",
+    "notas": "Ajuste acordado"
+  },
+  "mensaje": "Vencimiento actualizado"
+}
+```
+
+---
+
+## POST /api/tesoreria/cobros
+
+Registers a collection against a vencimiento. This is the treasury-level equivalent of `POST /api/facturas/:id/cobros` and supports the same full/partial payment logic.
+
+<ParamField body="vencimiento_id" type="string (UUID)" required>
+  The vencimiento to pay.
+</ParamField>
+
+<ParamField body="importe" type="decimal" required>
+  Amount collected. Must be > 0 and ≤ the vencimiento's `importe`.
+</ParamField>
+
+<ParamField body="fecha_pago" type="string (YYYY-MM-DD)" required>
+  Date the payment was received.
+</ParamField>
+
+<ParamField body="instrumento_id" type="string (UUID)" required>
+  Payment instrument used. Must be active.
+</ParamField>
+
+<ParamField body="fecha_vencimiento_resto" type="string (YYYY-MM-DD)">
+  Required for **partial** payments. The due date for the remaining balance instalment. Must be after `fecha_pago`.
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Optional note on the collection.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "cobro": {
+    "id": "uuid-cobro",
+    "factura_id": "uuid-factura",
+    "vencimiento_id": "uuid-vencimiento",
+    "importe": 1210.00,
+    "fecha_pago": "2024-04-05"
+  },
+  "vencimiento_actualizado": {
+    "id": "uuid-vencimiento",
+    "estado": "cobrado"
+  },
+  "mensaje": "Cobro registrado exitosamente"
+}
+```
+
+**curl example**
+
+```bash
+curl -s -X POST https://api.eme2app.com/api/tesoreria/cobros \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "vencimiento_id": "vvv00000-0000-0000-0000-000000000001",
+    "importe": 1210.00,
+    "fecha_pago": "2024-04-05",
+    "instrumento_id": "iii00000-0000-0000-0000-000000000001"
+  }'
+```
+
+**Error responses**
+
+| Status | mensaje |
+|--------|---------|
+| 400 | `"Campos requeridos: vencimiento_id, importe, fecha_pago"` |
+| 400 | `"El instrumento de pago es obligatorio"` |
+| 400 | `"El instrumento de pago no existe o no está activo"` |
+| 400 | `"Importe debe ser mayor a 0"` |
+| 404 | `"Vencimiento no encontrado"` |
+
+---
+
+## POST /api/tesoreria/vencimientos/:id/revertir-cobro
+
+Reverts all cobros registered on a vencimiento, restoring it to `pending`. Partial-payment rest vencimientos created by this vencimiento's cobro are also removed.
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Cobro revertido exitosamente",
+  "datos": {
+    "id": "uuid-vencimiento",
+    "estado": "pending",
+    "importe": "1210.00",
+    "fecha_vencimiento": "2024-04-30"
+  }
+}
+```
+
+---
+
+## POST /api/tesoreria/cobros/agrupar
+
+Groups two or more vencimientos (from any invoices) under a single synthetic agrupador vencimiento. This is used for bank remittance runs where multiple client instalments are combined into one bank operation.
+
+<ParamField body="vencimiento_ids" type="array of UUIDs" required>
+  IDs of the vencimientos to group. Minimum 2 required.
+</ParamField>
+
+<ParamField body="importe" type="decimal" required>
+  Total amount of the grouped instalment. Typically the sum of the individual vencimiento amounts.
+</ParamField>
+
+<ParamField body="fecha_vencimiento" type="string (YYYY-MM-DD)" required>
+  Due date of the agrupador.
+</ParamField>
+
+<ParamField body="instrumento_id" type="string (UUID)">
+  Payment instrument for the grouped cobro.
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Note on the grouped operation.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "agrupador_id": "uuid-agrupador",
+  "vencimientos_agrupados": 3
+}
+```
+
+<Note>
+Once vencimientos are grouped, their parent invoices cannot be edited, voided, or deleted until the group is dissolved with `POST /api/tesoreria/vencimientos/:id/desagrupar`.
+</Note>
+
+---
+
+## GET /api/tesoreria/vencimientos/:id/hijos
+
+Returns all child vencimientos belonging to an agrupador.
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "uuid-hijo-1",
+      "factura_id": "uuid-factura-1",
+      "importe": "403.33",
+      "fecha_vencimiento": "2024-04-30",
+      "estado": "pending",
+      "agrupador_id": "uuid-agrupador"
+    },
+    {
+      "id": "uuid-hijo-2",
+      "factura_id": "uuid-factura-2",
+      "importe": "403.33",
+      "fecha_vencimiento": "2024-04-30",
+      "estado": "pending",
+      "agrupador_id": "uuid-agrupador"
+    }
+  ]
+}
+```
+
+---
+
+## POST /api/tesoreria/vencimientos/:id/desagrupar
+
+Dissolves a grouped vencimiento, detaching all child vencimientos so they become individually editable again. The agrupador record is removed.
+
+<Warning>
+If the agrupador has a registered cobro, you must revert the cobro first (`POST /api/tesoreria/vencimientos/:id/revertir-cobro`) before desagrupando.
+</Warning>
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "vencimientos_liberados": 3
+}
+```

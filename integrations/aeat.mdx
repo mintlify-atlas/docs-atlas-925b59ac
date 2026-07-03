@@ -1,0 +1,312 @@
+---
+title: "AEAT NIF Validation: Single and Bulk Tax Identity Checks"
+sidebarTitle: "AEAT Validation"
+description: "Validate Spanish NIF and CIF identities against the AEAT tax census in Eme2App. Supports single validation, bulk processing up to 20,000 NIFs, and cache-only lookups."
+---
+
+Eme2App connects to the Spanish Tax Agency (Agencia Estatal de Administración Tributaria, AEAT) via its **VNifV2 SOAP web service** to verify whether a NIF or CIF belongs to a registered taxpayer in the Spanish census. Every validation result is cached in Eme2App's database, so repeat lookups for already-identified taxpayers are served instantly without a second SOAP call. The service supports individual NIF checks, approximate name searches across cached results, and batch operations that process up to 20,000 taxpayers in a single API request — all under the same JWT-authenticated context.
+
+## Authentication and authorization
+
+All AEAT endpoints are mounted under `/api/aeat` and require:
+
+- A valid **JWT bearer token** in the `Authorization` header.
+- The token must belong to an active empresa (company) context (`verificarEmpresaActiva`).
+- Caller role must be **`admin`** or **`user`**.
+
+```http
+Authorization: Bearer <your_jwt_token>
+```
+
+## AEAT digital certificate
+
+AEAT's VNifV2 service requires a valid Spanish digital certificate for mutual TLS authentication. Eme2App resolves the certificate through the following priority chain:
+
+<Steps>
+  <Step title="Company-specific certificate (preferred)">
+    Upload your empresa's PFX or P12 certificate via `POST /api/empresa/certificado`. Eme2App converts it to PEM internally and stores it encrypted against your `empresa_id`. Maximum file size is **5 MB**.
+  </Step>
+  <Step title="App-level fallback certificate">
+    If no company certificate is found, Eme2App falls back to an application-level certificate stored in `config_sistema.aeat_cert_pem`. This is managed by a **superadmin** and can serve as a shared fallback for all companies.
+  </Step>
+  <Step title="No certificate — validation blocked">
+    If neither source yields a valid certificate, the service returns HTTP `500` with error code `AEAT_CERT_MISSING` and validation is refused.
+  </Step>
+</Steps>
+
+### Upload a certificate
+
+```bash
+curl -X POST https://your-eme2app.com/api/empresa/certificado \
+  -H "Authorization: Bearer <token>" \
+  -F "certificado=@/path/to/your-cert.pfx" \
+  -F "passphrase=your_pfx_passphrase"
+```
+
+The response returns the certificate subject, issuer, validity dates, serial number, and the extracted NIF so you can confirm the right certificate was uploaded.
+
+---
+
+## Endpoints
+
+<CardGroup cols={2}>
+  <Card title="GET /api/aeat/cache-check/:nif" icon="database">
+    Lightweight cache-only lookup. Returns immediately without calling AEAT.
+  </Card>
+  <Card title="GET /api/aeat/buscar-por-nombre/:q" icon="magnifying-glass">
+    Approximate name search across all cached validated NIFs.
+  </Card>
+  <Card title="POST /api/aeat/validar" icon="shield-check">
+    Single NIF validation — always calls AEAT, bypasses the cache read.
+  </Card>
+  <Card title="POST /api/aeat/validar-masivo" icon="list-check">
+    Bulk NIF validation for up to 20,000 taxpayers per request.
+  </Card>
+</CardGroup>
+
+---
+
+## GET /api/aeat/cache-check/:nif
+
+Returns a cached result for a NIF **without making any SOAP call to AEAT**. Only succeeds if the NIF has been previously validated with result `IDENTIFICADO`. DNI numbers submitted as 8 digits are auto-completed with the correct control letter before the cache lookup.
+
+<Note>
+  This endpoint is designed for high-frequency UI checks (e.g., autocomplete fields) where avoiding AEAT latency is important. It will return `estado: "no_encontrado"` for any NIF that has never been validated or whose last result was not `IDENTIFICADO` — it does **not** mean the NIF is invalid, only that no cached positive result exists yet. Use `POST /api/aeat/validar` to perform an authoritative live check.
+</Note>
+
+**Response — found in cache:**
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "nif": "B12345678",
+    "nombre": "EMPRESA EJEMPLO SL",
+    "resultado": "Identificado"
+  }
+}
+```
+
+**Response — not in cache:**
+
+```json
+{
+  "estado": "no_encontrado"
+}
+```
+
+---
+
+## GET /api/aeat/buscar-por-nombre/:q
+
+Searches the local cache of validated NIFs by approximate company or person name. The query string `:q` must be at least 2 characters. Results are paginated.
+
+| Query param | Type    | Default | Description                     |
+|-------------|---------|---------|---------------------------------|
+| `offset`    | integer | `0`     | Number of records to skip       |
+| `limit`     | integer | `10`    | Records per page (max `50`)     |
+
+```bash
+curl "https://your-eme2app.com/api/aeat/buscar-por-nombre/Construcciones%20Lopez?limit=5" \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response:**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    { "nif": "B87654321", "nombre_oficial": "CONSTRUCCIONES LOPEZ SL" }
+  ],
+  "total": 1,
+  "offset": 0,
+  "limit": 5
+}
+```
+
+---
+
+## POST /api/aeat/validar
+
+Validates a single NIF against the live AEAT VNifV2 SOAP service. The cache is **not** consulted for the read path — this endpoint always fires a real SOAP request. A successful `IDENTIFICADO` result is then written to the cache for future lookups.
+
+### Request body
+
+| Field       | Type               | Required | Description                                                        |
+|-------------|--------------------|----------|--------------------------------------------------------------------|
+| `nif`       | string             | ✅ Yes   | The NIF/CIF to validate. Dashes, spaces, and lowercase are cleaned automatically. |
+| `nombre`    | string             | Conditional | Required for `tipo_nif: 'F'` (persona física) and `'N'` (NIE). Optional for `'J'` (jurídica/CIF). |
+| `tipo_nif`  | `'F'` \| `'J'` \| `'N'` \| `''` | No | NIF type. Auto-detected from the NIF format if omitted. |
+| `pais_id`   | string             | No       | Country ID from `/api/empresa/paises`. Used to route between AEAT (national) and VIES (intra-EU, future). |
+
+<Note>
+  For **persona física** (DNIs) and **NIE** holders, the `nombre` field is mandatory — AEAT requires it for matching in the census. For **CIF** (sociedades), the name is optional and AEAT can identify the entity by NIF alone.
+</Note>
+
+### Example — validate a CIF
+
+```bash
+curl -X POST https://your-eme2app.com/api/aeat/validar \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nif": "B12345678",
+    "nombre": "Empresa Ejemplo SL",
+    "tipo_nif": "J"
+  }'
+```
+
+### Example — validate a DNI (persona física)
+
+```bash
+curl -X POST https://your-eme2app.com/api/aeat/validar \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nif": "12345678Z",
+    "nombre": "García López, Juan",
+    "tipo_nif": "F"
+  }'
+```
+
+### Successful response
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "nif": "B12345678",
+    "nombre": "EMPRESA EJEMPLO SL",
+    "resultado": "Identificado",
+    "tipo_nif": "J",
+    "desde_cache": false
+  }
+}
+```
+
+### Suggestion response (fuzzy control-letter correction)
+
+When Eme2App detects that the NIF's control letter is incorrect but finds similar NIFs in the cache, it returns a `sugerencia` state instead of making a potentially wrong SOAP call:
+
+```json
+{
+  "estado": "sugerencia",
+  "sugerencias": [
+    {
+      "nif": "B12345679",
+      "nombre": "EMPRESA EJEMPLO SL",
+      "distancia": 1
+    }
+  ],
+  "mensaje": "¿Quiso decir el NIF B12345679 (EMPRESA EJEMPLO SL)?",
+  "warning": "La letra de control debería ser 9, no 8"
+}
+```
+
+### Error responses
+
+| HTTP status | `estado`  | Cause                                                |
+|-------------|-----------|------------------------------------------------------|
+| `400`       | `error`   | Missing or malformed NIF; `nombre` missing for tipo F/N |
+| `400`       | `error`   | NIF format invalid after normalization               |
+| `501`       | `error`   | `pais_id` resolves to an intra-EU territory (VIES not yet implemented) |
+| `502`       | `error`   | AEAT connection error or 30-second timeout           |
+| `500`       | `error`   | No AEAT certificate configured (`AEAT_CERT_MISSING`) |
+
+---
+
+## POST /api/aeat/validar-masivo
+
+Validates a list of taxpayers against AEAT. Entries are processed **sequentially** to avoid overwhelming AEAT's infrastructure. Each item in the response array maps one-to-one to the input array by position.
+
+<Warning>
+  The maximum number of `contribuyentes` per request is **20,000**. Submitting an array larger than this limit returns HTTP `400` immediately with message `"El número máximo de contribuyentes por petición es 20000"`. For datasets larger than 20,000 records, split the payload into multiple requests.
+</Warning>
+
+### Request body
+
+```json
+{
+  "contribuyentes": [
+    { "nif": "B12345678", "nombre": "Empresa Ejemplo SL" },
+    { "nif": "12345678Z", "nombre": "García López, Juan" },
+    { "nif": "X1234567L", "nombre": "Petrova Ivanova" }
+  ]
+}
+```
+
+| Field                          | Type    | Required | Description                         |
+|--------------------------------|---------|----------|-------------------------------------|
+| `contribuyentes`               | array   | ✅ Yes   | Array of taxpayer objects (1–20,000) |
+| `contribuyentes[].nif`         | string  | ✅ Yes   | NIF/CIF to validate                 |
+| `contribuyentes[].nombre`      | string  | No       | Name (required by AEAT for tipo F/N) |
+
+### Example
+
+```bash
+curl -X POST https://your-eme2app.com/api/aeat/validar-masivo \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contribuyentes": [
+      { "nif": "B12345678", "nombre": "Empresa Ejemplo SL" },
+      { "nif": "A87654321", "nombre": "Otra Empresa SA" },
+      { "nif": "99999999R", "nombre": "NIF Inexistente" }
+    ]
+  }'
+```
+
+### Response
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "nif": "B12345678",
+      "nombre": "Empresa Ejemplo SL",
+      "resultado": "Identificado"
+    },
+    {
+      "nif": "A87654321",
+      "nombre": "Otra Empresa SA",
+      "resultado": "Identificado"
+    },
+    {
+      "nif": "99999999R",
+      "nombre": "NIF Inexistente",
+      "resultado": "No identificado"
+    }
+  ],
+  "total": 3,
+  "exitosos": 2
+}
+```
+
+Items that fail individually (invalid format, AEAT connection error for that entry) include an `error` field and continue processing the rest of the list — the overall request does not abort.
+
+---
+
+## NIF normalization and auto-correction
+
+Eme2App applies several normalization steps before calling AEAT:
+
+<Accordion title="Automatic NIF normalization rules">
+  - **Whitespace and dashes** are stripped; input is uppercased.
+  - **8-digit DNI** (missing control letter): the correct letter is computed using the standard modulo-23 algorithm and appended.
+  - **Short NIFs** with 7–8 characters: leading zeros are padded to reach the expected 9-character length for DNI, NIE, and CIF formats.
+  - **Wrong control letter**: if Eme2App detects the letter is incorrect, it auto-corrects before the SOAP call and includes a `warning` field in the response so the calling UI can alert the user.
+  - NIFs that cannot be normalized to exactly 9 characters are rejected with `HTTP 400`.
+</Accordion>
+
+---
+
+## Cache vs. live call — quick reference
+
+| Endpoint                         | Reads cache | Writes cache | Calls AEAT SOAP |
+|----------------------------------|:-----------:|:------------:|:---------------:|
+| `GET /cache-check/:nif`          | ✅           | ❌           | ❌              |
+| `GET /buscar-por-nombre/:q`      | ✅           | ❌           | ❌              |
+| `POST /validar`                  | ❌           | ✅ (on hit)  | ✅ always       |
+| `POST /validar-masivo`           | ❌           | ✅ (on hit)  | ✅ per entry    |

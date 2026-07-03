@@ -1,0 +1,817 @@
+---
+title: "Company API: Profile, Logo, SMTP, and Certificates"
+sidebarTitle: "Company"
+description: "REST API reference for Eme2App company settings. Retrieve and update company profile, upload logo, configure SMTP, manage AEAT certificates, and handle accounting data."
+---
+
+The Company API is the control plane for every tenant-level setting in Eme2App. A single `empresa` record holds the company's legal identity (name, NIF, address), outbound email configuration (SMTP provider and credentials), the company logo stored as a base64 string, fiscal advisory details, arbitrary key/value parameters, numeric counters used for invoice and document numbering, and the AEAT digital certificate required for electronic VAT submissions. Most write endpoints are restricted to users with role `admin`; read endpoints are available to any authenticated user belonging to the company.
+
+## Authentication
+
+All endpoints require a JWT in the `Authorization` header. Admin-only endpoints are noted in the table below.
+
+```
+Authorization: Bearer <token>
+```
+
+---
+
+## Endpoints
+
+| Method | Path | Role | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/empresa` | any | Get current company profile |
+| `POST` | `/api/empresa` | admin | Create or update company |
+| `PUT` | `/api/empresa` | admin | Update company |
+| `PUT` | `/api/empresa/logo/upload` | admin | Upload company logo (base64) |
+| `POST` | `/api/empresa/probar-email` | admin | Test SMTP configuration |
+| `GET` | `/api/empresa/paises` | any | Country catalog |
+| `GET` | `/api/empresa/asesoria` | any | Get fiscal advisory data |
+| `PUT` | `/api/empresa/asesoria` | admin | Save fiscal advisory data |
+| `GET` | `/api/empresa/parametros` | any | List company parameters |
+| `POST` | `/api/empresa/parametros` | admin | Save a parameter |
+| `DELETE` | `/api/empresa/parametros/:parametro` | admin | Delete a parameter |
+| `GET` | `/api/empresa/contadores` | any | List counters |
+| `POST` | `/api/empresa/contadores` | admin | Save a counter |
+| `DELETE` | `/api/empresa/contadores/:campo` | admin | Delete a counter |
+| `POST` | `/api/empresa/recalcular-cuentas-contables` | admin | Recalculate accounting codes |
+| `POST` | `/api/empresa/exportar-cuentas-contables/excel` | admin | Export accounting codes to Excel |
+| `GET` | `/api/empresa/certificado` | admin | Get AEAT certificate info |
+| `POST` | `/api/empresa/certificado` | admin | Upload AEAT PFX/P12 certificate |
+| `DELETE` | `/api/empresa/certificado` | admin | Remove AEAT certificate |
+
+---
+
+## GET /api/empresa
+
+Returns the full company profile for the authenticated user's `empresa_id` (read from the JWT). The `smtp_pass` field is **never included** in any response.
+
+```bash
+curl -X GET https://api.eme2app.es/api/empresa \
+  -H "Authorization: Bearer <token>"
+```
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "id": "uuid-empresa",
+    "nombre": "Mi Empresa SL",
+    "nombre_comercial": "Mi Empresa",
+    "nif": "B12345678",
+    "email": "admin@miempresa.es",
+    "telefono": "911234567",
+    "direccion": "Calle Ejemplo 10",
+    "codigo_postal": "28001",
+    "localidad": "Madrid",
+    "provincia": "Madrid",
+    "web": "https://miempresa.es",
+    "logo_base64": "data:image/png;base64,...",
+    "usa_series": false,
+    "smtp_provider": "gmail",
+    "smtp_host": null,
+    "smtp_port": null,
+    "smtp_secure": false,
+    "smtp_user": "notificaciones@miempresa.es",
+    "email_from": "notificaciones@miempresa.es",
+    "estado": true,
+    "pageSize_default": 25,
+    "digitos_plan_contable": 8,
+    "created_at": "2024-01-01T00:00:00.000Z",
+    "updated_at": "2024-06-15T12:00:00.000Z"
+  }
+}
+```
+
+<ResponseField name="datos.id" type="string">
+  UUID of the company record.
+</ResponseField>
+
+<ResponseField name="datos.nombre" type="string">
+  Legal company name.
+</ResponseField>
+
+<ResponseField name="datos.nombre_comercial" type="string | null">
+  Trading name / brand name. Appears on invoices when set.
+</ResponseField>
+
+<ResponseField name="datos.nif" type="string | null">
+  Company tax identification number (NIF/CIF).
+</ResponseField>
+
+<ResponseField name="datos.email" type="string | null">
+  Primary contact email address.
+</ResponseField>
+
+<ResponseField name="datos.telefono" type="string | null">
+  Contact phone number.
+</ResponseField>
+
+<ResponseField name="datos.logo_base64" type="string | null">
+  Company logo encoded as a base64 data URI. Included directly in PDF generation — no separate asset URL is needed.
+</ResponseField>
+
+<ResponseField name="datos.smtp_provider" type="string | null">
+  Configured SMTP provider. One of `gmail`, `outlook`, `brevo`, `custom`, or `null` when not configured.
+</ResponseField>
+
+<ResponseField name="datos.usa_series" type="boolean">
+  Whether invoice series numbering is enabled for this company.
+</ResponseField>
+
+<ResponseField name="datos.pageSize_default" type="number">
+  Default number of rows per page in data tables (stored as `pagesize_default`; normalised to `pageSize_default` in API responses).
+</ResponseField>
+
+<ResponseField name="datos.digitos_plan_contable" type="number">
+  Number of digits used in the chart of accounts codes (default 8).
+</ResponseField>
+
+---
+
+## POST /api/empresa
+
+Creates the company record if none exists, or updates the existing one. Both `POST` and `PUT` call the same underlying `guardarEmpresa` function.
+
+```bash
+curl -X POST https://api.eme2app.es/api/empresa \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Mi Empresa SL",
+    "nombre_comercial": "Mi Empresa",
+    "nif": "B12345678",
+    "email": "admin@miempresa.es",
+    "telefono": "911234567",
+    "direccion": "Calle Ejemplo 10",
+    "codigo_postal": "28001",
+    "localidad": "Madrid",
+    "provincia": "Madrid",
+    "smtp_provider": "gmail",
+    "smtp_user": "notificaciones@miempresa.es",
+    "smtp_pass": "app-password-here",
+    "email_from": "notificaciones@miempresa.es",
+    "usa_series": false,
+    "pageSize_default": 25
+  }'
+```
+
+### Body parameters
+
+<ParamField body="nombre" type="string">
+  Legal company name. Cannot be an empty string if provided.
+</ParamField>
+
+<ParamField body="nombre_comercial" type="string | null">
+  Trading name. Pass `null` to clear.
+</ParamField>
+
+<ParamField body="nif" type="string">
+  Company NIF/CIF. Unique across all companies in the database.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Primary contact email. Must be a valid email format.
+</ParamField>
+
+<ParamField body="telefono" type="string">
+  Contact phone number.
+</ParamField>
+
+<ParamField body="direccion" type="string">
+  Street address.
+</ParamField>
+
+<ParamField body="codigo_postal" type="string">
+  Postal code.
+</ParamField>
+
+<ParamField body="localidad" type="string">
+  City / municipality.
+</ParamField>
+
+<ParamField body="provincia" type="string">
+  Province.
+</ParamField>
+
+<ParamField body="web" type="string">
+  Company website URL.
+</ParamField>
+
+<ParamField body="usa_series" type="boolean">
+  Enable invoice series numbering.
+</ParamField>
+
+<ParamField body="smtp_provider" type="string">
+  One of `gmail`, `outlook`, `brevo`, or `custom`.
+</ParamField>
+
+<ParamField body="smtp_host" type="string | null">
+  SMTP server hostname. Required when `smtp_provider` is `custom`.
+</ParamField>
+
+<ParamField body="smtp_port" type="number | null">
+  SMTP port (1–65535). Required when `smtp_provider` is `custom`.
+</ParamField>
+
+<ParamField body="smtp_secure" type="boolean | null">
+  Use TLS/SSL on the SMTP connection.
+</ParamField>
+
+<ParamField body="smtp_user" type="string | null">
+  SMTP authentication username.
+</ParamField>
+
+<ParamField body="smtp_pass" type="string | null">
+  SMTP authentication password. Stored encrypted; never returned in API responses. If omitted or blank on an update, the existing stored password is preserved.
+</ParamField>
+
+<ParamField body="email_from" type="string | null">
+  Sender address shown in the `From:` header of outbound emails.
+</ParamField>
+
+<ParamField body="pageSize_default" type="number">
+  Default rows per page for data tables. Stored as an integer; defaults to `25`.
+</ParamField>
+
+### Response `201`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Empresa guardada exitosamente",
+  "datos": { "id": "uuid-empresa", "nombre": "Mi Empresa SL", ... }
+}
+```
+
+---
+
+## PUT /api/empresa
+
+Identical to `POST /api/empresa` in behaviour (same controller function). Returns HTTP `200` instead of `201`. Use this when you know the company record already exists.
+
+---
+
+## PUT /api/empresa/logo/upload
+
+Replaces the company logo with a new base64-encoded image. The image is stored directly in the `logo` column of the `empresa` table and returned in all company profile responses as `logo_base64`.
+
+```bash
+curl -X PUT https://api.eme2app.es/api/empresa/logo/upload \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "logoBase64": "data:image/png;base64,iVBORw0KGgo..." }'
+```
+
+### Body parameters
+
+<ParamField body="logoBase64" type="string" required>
+  Base64-encoded image string, typically prefixed with a data URI scheme (`data:image/png;base64,...`). Missing or empty value returns a `400` error.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Logo actualizado exitosamente",
+  "datos": { "id": "uuid-empresa", "logo_base64": "data:image/png;base64,...", ... }
+}
+```
+
+---
+
+## POST /api/empresa/probar-email
+
+Sends a test email using the SMTP settings in the request body. You can pass settings before saving them to verify the configuration is working. If `smtp_pass` is blank, the currently stored password is used — useful for testing after an update where only non-credential fields changed.
+
+```bash
+curl -X POST https://api.eme2app.es/api/empresa/probar-email \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "destino": "test@example.com",
+    "smtp_provider": "gmail",
+    "smtp_user": "notificaciones@miempresa.es",
+    "smtp_pass": "app-password-here",
+    "email_from": "notificaciones@miempresa.es"
+  }'
+```
+
+### Body parameters
+
+<ParamField body="destino" type="string" required>
+  Recipient email address for the test message. Must be a valid email format.
+</ParamField>
+
+<ParamField body="smtp_provider" type="string">
+  One of `gmail`, `outlook`, `brevo`, or `custom`.
+</ParamField>
+
+<ParamField body="smtp_host" type="string | null">
+  SMTP host (required for `custom` provider).
+</ParamField>
+
+<ParamField body="smtp_port" type="number | null">
+  SMTP port (1–65535).
+</ParamField>
+
+<ParamField body="smtp_secure" type="boolean | null">
+  Use TLS/SSL.
+</ParamField>
+
+<ParamField body="smtp_user" type="string | null">
+  SMTP username.
+</ParamField>
+
+<ParamField body="smtp_pass" type="string | null">
+  SMTP password. If blank, the saved company password is used automatically.
+</ParamField>
+
+<ParamField body="email_from" type="string | null">
+  Sender address.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Email de prueba enviado a test@example.com"
+}
+```
+
+### Response `400`
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Error al probar email: Invalid login: ..."
+}
+```
+
+---
+
+## GET /api/empresa/paises
+
+Returns the global read-only country catalog. Values are shared across all companies and are not filterable. Use the `id` to populate the `pais_id` field on client and supplier records.
+
+```bash
+curl -X GET https://api.eme2app.es/api/empresa/paises \
+  -H "Authorization: Bearer <token>"
+```
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    { "id": "uuid-es", "codigo": "ES", "nombre": "España", "territorio_fiscal_codigo": "PEN" },
+    { "id": "uuid-de", "codigo": "DE", "nombre": "Alemania", "territorio_fiscal_codigo": "INT" }
+  ]
+}
+```
+
+---
+
+## Fiscal advisory (asesoría)
+
+### GET /api/empresa/asesoria
+
+Returns the fiscal advisory contact and configuration stored for the authenticated company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/empresa/asesoria \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "nombre": "Asesoría García",
+    "email": "contacto@asesoria-garcia.es",
+    "telefono": "915555555",
+    "aplicacion_id": "uuid-aplicacion"
+  }
+}
+```
+
+### PUT /api/empresa/asesoria
+
+Saves or replaces the fiscal advisory data. Requires `admin` role.
+
+```bash
+curl -X PUT https://api.eme2app.es/api/empresa/asesoria \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Asesoría García",
+    "email": "contacto@asesoria-garcia.es",
+    "telefono": "915555555"
+  }'
+```
+
+<ParamField body="email" type="string">
+  Advisory contact email. Must be a valid email format if provided.
+</ParamField>
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": { ... },
+  "mensaje": "Asesoría guardada correctamente"
+}
+```
+
+---
+
+## Parameters
+
+Company parameters are free-form key/value pairs used to store configuration flags, integration tokens, or any per-company settings that do not have a dedicated column.
+
+### GET /api/empresa/parametros
+
+Returns all parameters for the authenticated company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/empresa/parametros \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    { "parametro": "FACTURA_PIE_TEXTO", "descripcion": "Texto de pie de factura", "valor": "Gracias por su confianza." }
+  ]
+}
+```
+
+### POST /api/empresa/parametros
+
+Creates or updates a parameter (upsert). Requires `admin` role.
+
+```bash
+curl -X POST https://api.eme2app.es/api/empresa/parametros \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parametro": "FACTURA_PIE_TEXTO",
+    "descripcion": "Texto de pie de factura",
+    "valor": "Gracias por su confianza."
+  }'
+```
+
+<ParamField body="parametro" type="string" required>
+  Unique key name for the parameter. Whitespace-trimmed; cannot be blank.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Human-readable description of what this parameter controls.
+</ParamField>
+
+<ParamField body="valor" type="string">
+  Value to store. Always coerced to a string.
+</ParamField>
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": { "parametro": "FACTURA_PIE_TEXTO", "valor": "Gracias por su confianza." },
+  "mensaje": "Parámetro guardado"
+}
+```
+
+### DELETE /api/empresa/parametros/:parametro
+
+Removes a parameter by its key name. Requires `admin` role.
+
+```bash
+curl -X DELETE https://api.eme2app.es/api/empresa/parametros/FACTURA_PIE_TEXTO \
+  -H "Authorization: Bearer <token>"
+```
+
+<ParamField path="parametro" type="string" required>
+  Key name of the parameter to delete.
+</ParamField>
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Parámetro eliminado"
+}
+```
+
+---
+
+## Counters
+
+Counters drive the automatic numbering of invoices, budgets, clients, suppliers, and other sequential documents. Each counter is identified by a `campo` name and holds an integer `valor`.
+
+### GET /api/empresa/contadores
+
+Returns all counters for the authenticated company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/empresa/contadores \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    { "campo": "facturas", "valor": 105 },
+    { "campo": "clientes", "valor": 41 }
+  ]
+}
+```
+
+### POST /api/empresa/contadores
+
+Creates or updates a counter (upsert). Requires `admin` role.
+
+```bash
+curl -X POST https://api.eme2app.es/api/empresa/contadores \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "campo": "facturas", "valor": 200 }'
+```
+
+<ParamField body="campo" type="string" required>
+  Name of the counter (e.g. `facturas`, `clientes`, `proveedores`). Whitespace-trimmed; cannot be blank.
+</ParamField>
+
+<ParamField body="valor" type="number" required>
+  New integer value for the counter. Must be zero or a positive integer.
+</ParamField>
+
+<Warning>
+  Setting a counter to a value lower than its current value may cause duplicate document numbers on the next auto-numbered document. Always set counters to values strictly higher than the last issued number.
+</Warning>
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": { "campo": "facturas", "valor": 200 },
+  "mensaje": "Contador guardado"
+}
+```
+
+### DELETE /api/empresa/contadores/:campo
+
+Removes a counter record. Requires `admin` role.
+
+```bash
+curl -X DELETE https://api.eme2app.es/api/empresa/contadores/facturas \
+  -H "Authorization: Bearer <token>"
+```
+
+<ParamField path="campo" type="string" required>
+  Name of the counter to delete.
+</ParamField>
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Contador eliminado"
+}
+```
+
+---
+
+## Accounting codes
+
+### POST /api/empresa/recalcular-cuentas-contables
+
+Recalculates all client and supplier sub-ledger account codes using a given number of digits for the chart of accounts. The operation updates `cuenta_contable_ventas` on all clients and `cuenta_contable_compras` on all suppliers in the company. Requires `admin` role.
+
+```bash
+curl -X POST https://api.eme2app.es/api/empresa/recalcular-cuentas-contables \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "digitos": 8 }'
+```
+
+<ParamField body="digitos" type="number" required>
+  Number of digits for sub-ledger account codes. Must be an integer between `6` and `12` inclusive. Values outside this range return a `400` error.
+</ParamField>
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "actualizados": 45,
+    "errores": 0
+  }
+}
+```
+
+### POST /api/empresa/exportar-cuentas-contables/excel
+
+Generates and downloads an XLSX file summarising the current accounting code assignments. The response is a binary `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` file, not a JSON envelope. Requires `admin` role.
+
+```bash
+curl -X POST https://api.eme2app.es/api/empresa/exportar-cuentas-contables/excel \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "filas": [...], "digitos": 8 }' \
+  --output cuentas_contables.xlsx
+```
+
+<ParamField body="filas" type="array">
+  Array of accounting row objects to include in the export. Pass an empty array `[]` to produce an empty template.
+</ParamField>
+
+<ParamField body="digitos" type="number">
+  Number of digits used in the account codes, shown in the file header.
+</ParamField>
+
+The response sets `Content-Disposition: attachment; filename="cuentas_contables_YYYY-MM-DD.xlsx"`.
+
+---
+
+## AEAT Certificate
+
+The AEAT certificate section manages the X.509 digital certificate (PFX/P12 format) used for Spanish tax authority electronic submissions. The certificate is converted to PEM internally, stored encrypted, and only metadata is returned — the private key and PEM bytes are never exposed through the API.
+
+### GET /api/empresa/certificado
+
+Returns metadata about the currently stored AEAT certificate. Returns `datos: null` if no certificate has been uploaded. Requires `admin` role.
+
+```bash
+curl -X GET https://api.eme2app.es/api/empresa/certificado \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Response `200` — certificate present
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "subject": "CN=MI EMPRESA SL, serialNumber=B12345678",
+    "organization": "MI EMPRESA SL",
+    "nif": "B12345678",
+    "empresa_nif": "B12345678",
+    "issuer": "CN=FNMT-RCM, OU=Ceres, O=FNMT-RCM, C=ES",
+    "valid_from": "2023-10-01T00:00:00.000Z",
+    "valid_to": "2027-10-01T00:00:00.000Z",
+    "serial": "1A2B3C4D"
+  }
+}
+```
+
+<ResponseField name="datos.subject" type="string">
+  Full subject distinguished name from the certificate.
+</ResponseField>
+
+<ResponseField name="datos.organization" type="string">
+  Organisation name extracted from the certificate subject.
+</ResponseField>
+
+<ResponseField name="datos.nif" type="string | null">
+  NIF extracted from the certificate's `serialNumber` field. Compare with `empresa_nif` to verify the certificate belongs to the correct company.
+</ResponseField>
+
+<ResponseField name="datos.empresa_nif" type="string | null">
+  NIF stored on the company profile, for easy comparison.
+</ResponseField>
+
+<ResponseField name="datos.valid_from" type="string">
+  Certificate validity start date (ISO 8601).
+</ResponseField>
+
+<ResponseField name="datos.valid_to" type="string">
+  Certificate expiry date (ISO 8601).
+</ResponseField>
+
+<ResponseField name="datos.serial" type="string">
+  Certificate serial number in hex.
+</ResponseField>
+
+#### Response `200` — no certificate
+
+```json
+{
+  "estado": "exito",
+  "datos": null
+}
+```
+
+### POST /api/empresa/certificado
+
+Uploads a new AEAT digital certificate. The file must be in PFX or P12 format and must not exceed 5 MB. The server converts the PFX to PEM using the provided passphrase and stores the result encrypted. Any previously stored certificate is replaced. Requires `admin` role.
+
+The request must use `multipart/form-data` encoding.
+
+```bash
+curl -X POST https://api.eme2app.es/api/empresa/certificado \
+  -H "Authorization: Bearer <token>" \
+  -F "certificado=@/path/to/cert.pfx" \
+  -F "passphrase=MiContraseñaSegura"
+```
+
+<ParamField body="certificado" type="file" required>
+  The PFX or P12 certificate file. Maximum size: 5 MB. File extension must be `.pfx` or `.p12`; any other extension returns a `400` error.
+</ParamField>
+
+<ParamField body="passphrase" type="string">
+  Passphrase used to decrypt the PFX container. Leave empty if the certificate has no passphrase.
+</ParamField>
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Certificado AEAT guardado correctamente",
+  "datos": {
+    "subject": "CN=MI EMPRESA SL, serialNumber=B12345678",
+    "organization": "MI EMPRESA SL",
+    "nif": "B12345678",
+    "empresa_nif": "B12345678",
+    "issuer": "CN=FNMT-RCM, OU=Ceres, O=FNMT-RCM, C=ES",
+    "valid_from": "2023-10-01T00:00:00.000Z",
+    "valid_to": "2027-10-01T00:00:00.000Z",
+    "serial": "1A2B3C4D"
+  }
+}
+```
+
+#### Response `400` — wrong file type
+
+```json
+{
+  "estado": "error",
+  "mensaje": "El archivo debe tener extensión .pfx o .p12"
+}
+```
+
+#### Response `400` — wrong passphrase / corrupt file
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Error al procesar el certificado"
+}
+```
+
+<Note>
+  After uploading, verify that `datos.nif` matches `datos.empresa_nif`. A mismatch means the certificate was issued for a different tax number than the one configured on the company profile, which will cause AEAT submissions to be rejected.
+</Note>
+
+### DELETE /api/empresa/certificado
+
+Permanently removes the stored AEAT certificate and all associated data. Requires `admin` role.
+
+```bash
+curl -X DELETE https://api.eme2app.es/api/empresa/certificado \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Certificado AEAT eliminado correctamente"
+}
+```
+
+---
+
+## Error reference
+
+| HTTP status | `estado` | Typical `mensaje` |
+|-------------|----------|-------------------|
+| `400` | `error` | `"Logo base64 requerido"` |
+| `400` | `error` | `"Dígitos inválidos (6-12)"` |
+| `400` | `error` | `"El archivo debe tener extensión .pfx o .p12"` |
+| `400` | `error` | `"El valor debe ser un número positivo"` |
+| `400` | `error` | `"Debes indicar un email de destino valido"` |
+| `400` | `error` | Validation error details from express-validator |
+| `404` | `error` | `"Empresa no encontrada"` |
+| `500` | `error` | Internal server error message |

@@ -1,0 +1,326 @@
+---
+title: "Invoice Management: Create, Emit, and Collect Payments"
+sidebarTitle: "Invoices"
+description: "Learn how Eme2App handles invoice lifecycle: creating, emitting, voiding invoices, managing due dates, registering collections, and sending by email."
+---
+
+Invoices are the central document of Eme2App's billing system. Every invoice moves through a well-defined lifecycle — from an editable **borrador** draft, through **confirmada** (emitted), to one of three settled states: **cobrada** (fully collected), **parcialmente cobrada** (partially collected), or **anulada** (voided). An overdue confirmed invoice whose due dates have passed is flagged as **vencida**. The backend enforces strict transition rules at each step, preventing data loss and ensuring fiscal integrity throughout.
+
+---
+
+## Invoice Lifecycle
+
+```
+borrador ──► confirmada ──► cobrada
+                  │         parcialmente cobrada
+                  │         vencida
+                  └──► anulada (+ factura espejo negativa)
+```
+
+| Estado | Meaning |
+|---|---|
+| `borrador` | Draft — fully editable, no due dates generated yet |
+| `confirmada` | Emitted — due dates generated from `forma_pago`; limited edits allowed |
+| `cobrada` | All vencimientos have been collected |
+| `parcialmente cobrada` | At least one vencimiento collected, others still pending |
+| `vencida` | One or more vencimientos are past their `fecha_vencimiento` and unpaid |
+| `anulada` | Voided — a mirror negative invoice (rectificativa) was automatically created |
+
+---
+
+## Series and Numbering
+
+When the company has `usa_series = true` in the `empresa` table, every invoice **must** belong to a `series_facturas` entry. A series carries a short `codigo` (e.g. `"A"`, `"B"`) and a flag `es_rectificativa` — only non-rectificative series may be used for regular invoices.
+
+To retrieve the next available number for a given series:
+
+```http
+GET /api/facturas/proximo-numero?serie=A
+GET /api/facturas/proximo-numero?serie_id=<uuid>
+```
+
+```json
+{ "proximo_numero": 42 }
+```
+
+<Note>
+The unique constraint on the `facturas` table is `(empresa_id, numero, serie)`. Two invoices may share the same `numero` as long as they belong to different series.
+</Note>
+
+---
+
+## Creating an Invoice
+
+`POST /api/facturas`
+
+All routes under `/api/facturas` require a valid JWT (`verificarAutenticacion` middleware). The authenticated user's `empresa_id` is injected automatically.
+
+**Required fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `cliente_id` | `string` (UUID) | Must exist and belong to the company |
+| `numero` | `integer` | Unique within `(empresa_id, serie)` |
+| `detalles` | `array` | At least one line item |
+| `forma_pago_id` | `string` (UUID) | Falls back to `cliente.forma_pago_defecto_id` if omitted |
+
+**Optional fields:** `fecha` (defaults to today), `serie` / `serie_id`, `notas`.
+
+**Detail line fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `articulo_id` | `string` | Required for non-comment lines |
+| `descripcion` | `string` | Free-text override of the article description |
+| `cantidad` | `number` | Quantity |
+| `precio_unitario` | `number` | Unit price before tax |
+| `es_comentario` | `boolean` | If `true`, the line is a text-only comment; `articulo_id`, `cantidad`, `precio_unitario` are ignored |
+
+The backend automatically resolves the VAT rate from `articulo.iva_id`, applies **recargo de equivalencia** for clients in the `REC` or `SIM` tax regime, and withholds **IRPF** according to the client's `regimen_irpf`. Totals (`subtotal`, `iva_monto`, `recargo_total`, `irpf_monto`, `total`) are computed server-side and stored in the `facturas` table.
+
+```json
+// POST /api/facturas — example request body
+{
+  "cliente_id": "abc123",
+  "numero": 42,
+  "fecha": "2025-06-15",
+  "serie": "A",
+  "forma_pago_id": "uuid-forma-pago",
+  "notas": "Proyecto web Q2",
+  "detalles": [
+    {
+      "articulo_id": "art-001",
+      "descripcion": "Desarrollo frontend",
+      "cantidad": 10,
+      "precio_unitario": 150.00
+    },
+    {
+      "es_comentario": true,
+      "descripcion": "— Entrega fase 1 completada —"
+    }
+  ]
+}
+```
+
+```json
+// 201 Created
+{ "id": "<factura_uuid>", "mensaje": "Factura creada exitosamente" }
+```
+
+---
+
+## Emitting an Invoice (estado-emision)
+
+The `estado_emision` field tracks the physical emission of the invoice document, independently of the billing state. Valid values and their one-way progression:
+
+```
+sin_emitir ──► pdf ──► email
+```
+
+```http
+PATCH /api/facturas/:id/estado-emision
+```
+
+```json
+{ "estado_emision": "pdf" }
+```
+
+Calling `POST /api/facturas/:id/enviar-email` automatically advances `estado_emision` to `"email"` upon a successful send.
+
+<Warning>
+`estado_emision` transitions are irreversible. You cannot move from `"email"` back to `"pdf"` or `"sin_emitir"`.
+</Warning>
+
+---
+
+## Confirming and Reverting State
+
+Use `PUT /api/facturas/:id/estado` to advance or revert the billing state:
+
+```json
+{ "estado": "confirmada" }
+```
+
+**Transition rules enforced by the backend:**
+
+- `borrador → confirmada`: generates `facturas_vencimientos` rows from the `forma_pago` template.
+- `confirmada → borrador`: allowed only if **no** vencimientos have been collected or partially paid; all vencimientos are deleted.
+- `anulada → *`: blocked — an anulada invoice is immutable.
+- `borrador → anulada`: blocked — confirm the invoice first.
+
+---
+
+## Voiding an Invoice
+
+`POST /api/facturas/:id/anular`
+
+Only `confirmada` invoices can be voided. The system:
+
+1. Locates the active rectificative series (or prompts the user to choose if multiple exist).
+2. Creates a **mirror negative invoice** (`factura espejo`) in that series with all amounts negated.
+3. Copies the original line items with negative `cantidad`.
+4. Creates negative `cobros` entries in the original invoice to reflect any payments already registered.
+5. Marks the original invoice as `anulada`.
+
+```json
+// POST /api/facturas/:id/anular
+{
+  "serie_rectificativa": "R",   // optional if only one rectificative series exists
+  "fecha_anulacion": "2025-06-20"
+}
+```
+
+```json
+// 200 OK
+{
+  "mensaje": "Factura 42 anulada. Se generó la factura 1 con serie R e importes en negativo.",
+  "factura_anulada_id": "<uuid>",
+  "factura_espejo_id": "<uuid>",
+  "numero_factura_espejo": 1,
+  "serie_factura_espejo": "R"
+}
+```
+
+<Note>
+To delete the rectificative invoice and restore the original to `confirmada`, simply delete the rectificative via `DELETE /api/facturas/:id`. The backend detects the `factura_origen_anulacion_id` link and restores the original automatically.
+</Note>
+
+---
+
+## Due Dates (Vencimientos)
+
+When an invoice transitions to `confirmada`, due dates are auto-generated from the `formas_pago_vencimientos` configuration of the invoice's `forma_pago`. Each row in `facturas_vencimientos` represents one instalment:
+
+| Field | Description |
+|---|---|
+| `numero_cuota` | Sequential instalment number |
+| `importe` | Amount due for this instalment |
+| `fecha_vencimiento` | Due date |
+| `estado` | `pending` / `partial` / `cobrado` / `overdue` |
+| `instrumento_id` | Expected payment instrument |
+| `agrupador_id` | Set when this vencimiento belongs to a treasury group |
+
+**Managing vencimientos on an invoice:**
+
+```http
+GET  /api/facturas/:id/vencimientos                     # list all
+GET  /api/facturas/:id/vencimientos-disponibles         # pending/partial only
+POST /api/facturas/:id/vencimientos                     # add a new one
+PATCH /api/facturas/:id/vencimientos/:vencimiento_id    # update date, amount, notes
+DELETE /api/facturas/:id/vencimientos/:vencimiento_id   # delete (must have no cobros)
+POST /api/facturas/:id/vencimientos/restaurar           # regenerate from forma_pago
+```
+
+<Warning>
+A vencimiento with an `agrupador_id` is locked for editing. Ungroup it from the Treasury module first (`POST /api/tesoreria/vencimientos/:id/desagrupar`) before making changes.
+</Warning>
+
+---
+
+## Registering Collections (Cobros)
+
+Cobros are registered against a specific `vencimiento_id`. The `instrumento_id` (payment instrument) is mandatory.
+
+`POST /api/facturas/:id/cobros`
+
+```json
+{
+  "vencimiento_id": "<uuid>",
+  "importe": 500.00,
+  "fecha_pago": "2025-06-18",
+  "instrumento_id": "<uuid>",
+  "notas": "Transferencia recibida"
+}
+```
+
+**Partial payment:** if `importe` is less than the vencimiento's full amount, provide `fecha_vencimiento_resto` — the backend marks the current vencimiento as `partial`, reduces its amount, and creates a new vencimiento for the remainder.
+
+```json
+{
+  "vencimiento_id": "<uuid>",
+  "importe": 200.00,
+  "fecha_pago": "2025-06-18",
+  "instrumento_id": "<uuid>",
+  "fecha_vencimiento_resto": "2025-07-31"
+}
+```
+
+**Reverting a cobro:**
+
+```http
+POST /api/facturas/:id/vencimientos/:vencimiento_id/revertir-cobro
+```
+
+This deletes all cobros linked to the vencimiento and restores its state to `pending`.
+
+---
+
+## Sending by Email
+
+`POST /api/facturas/:id/enviar-email`
+
+The invoice must be in `confirmada` state. The frontend generates the PDF client-side and sends it as a Base64 string:
+
+```json
+{
+  "destino": "cliente@empresa.es",
+  "pdf_base64": "<base64-string>",
+  "pdf_nombre": "factura-A-42.pdf",
+  "asunto": "Tu factura A-42",
+  "texto": "Hola, te adjuntamos la factura. Un saludo."
+}
+```
+
+The backend uses the company's configured SMTP settings (`smtp_host`, `smtp_port`, `smtp_user`, `smtp_pass`, `email_from`). On success, `estado_emision` is automatically advanced to `"email"`.
+
+---
+
+## Typical Workflow
+
+<Steps>
+  <Step title="Create a draft invoice">
+    Call `POST /api/facturas` with `cliente_id`, `numero`, `serie`, `forma_pago_id`, and at least one detail line. The invoice is saved with `estado = "borrador"`.
+  </Step>
+  <Step title="Review and confirm">
+    Call `PUT /api/facturas/:id/estado` with `{ "estado": "confirmada" }`. The backend generates `facturas_vencimientos` rows from the forma de pago template.
+  </Step>
+  <Step title="Send the PDF by email">
+    Call `POST /api/facturas/:id/enviar-email` with the Base64 PDF. The `estado_emision` advances to `"email"` automatically.
+  </Step>
+  <Step title="Register a cobro">
+    When the client pays, call `POST /api/facturas/:id/cobros` with the `vencimiento_id`, `importe`, `fecha_pago`, and `instrumento_id`.
+  </Step>
+  <Step title="Invoice is fully collected">
+    Once all vencimientos reach `cobrado` state, the invoice is considered fully collected.
+  </Step>
+</Steps>
+
+---
+
+## API Quick Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/facturas/proximo-numero` | Next available invoice number |
+| `GET` | `/api/facturas` | Paginated invoice list |
+| `GET` | `/api/facturas/informe-cobros` | Collections report |
+| `GET` | `/api/facturas/:id` | Invoice detail |
+| `POST` | `/api/facturas` | Create invoice |
+| `PUT` | `/api/facturas/:id` | Update invoice (borrador or confirmada) |
+| `PUT` | `/api/facturas/:id/estado` | Change billing state |
+| `PATCH` | `/api/facturas/:id/estado-emision` | Advance emission state |
+| `POST` | `/api/facturas/:id/anular` | Void invoice (creates mirror negative) |
+| `DELETE` | `/api/facturas/:id` | Delete invoice (borrador only) |
+| `POST` | `/api/facturas/:id/enviar-email` | Send PDF by email |
+| `GET` | `/api/facturas/:id/vencimientos` | List due dates |
+| `GET` | `/api/facturas/:id/vencimientos-disponibles` | List pending/partial due dates |
+| `POST` | `/api/facturas/:id/vencimientos` | Create a due date manually |
+| `PATCH` | `/api/facturas/:id/vencimientos/:vencimiento_id` | Update a due date |
+| `DELETE` | `/api/facturas/:id/vencimientos/:vencimiento_id` | Delete a due date |
+| `POST` | `/api/facturas/:id/vencimientos/restaurar` | Regenerate due dates from forma_pago |
+| `POST` | `/api/facturas/:id/cobros` | Register a collection |
+| `GET` | `/api/facturas/:id/cobros` | List collections with summary |
+| `DELETE` | `/api/facturas/:id/cobros/:cobro_id` | Delete cobro and revert vencimiento |
+| `PUT` | `/api/facturas/cobros/:id` | Update a cobro (date, instrument, notes) |
+| `DELETE` | `/api/facturas/cobros/:id` | Delete a cobro |
+| `POST` | `/api/facturas/:id/vencimientos/:vencimiento_id/revertir-cobro` | Revert all cobros on a vencimiento |

@@ -1,0 +1,292 @@
+---
+title: "Delivery Notes: Issue and Convert to Invoices"
+sidebarTitle: "Delivery Notes"
+description: "Manage delivery notes (albaranes) in Eme2App, convert them to invoices individually, or group multiple albaranes into a single billing invoice."
+---
+
+Delivery notes (albaranes) sit between a quote and an invoice in the sales workflow. They confirm that goods or services have been delivered before a formal invoice is raised, which is common practice in Spanish B2B billing. Eme2App supports creating albaranes from scratch, generating them directly from an accepted quote, and converting one or several albaranes into a single invoice — keeping a full traceability chain from quote through delivery to invoice.
+
+---
+
+## Albarán Lifecycle
+
+```
+editable ──► entregado ──► facturado
+```
+
+| Estado | Meaning |
+|---|---|
+| `editable` | Draft — can be updated or deleted |
+| `entregado` | Marked as delivered to the client |
+| `facturado` | Converted to an invoice; no further edits or deletion allowed |
+
+<Note>
+Once an albarán reaches `facturado` state, it cannot be deleted. If the associated invoice is later deleted, the backend automatically reverts all linked albaranes back to `editable`.
+</Note>
+
+---
+
+## Auto-Numbering
+
+```http
+GET /api/albaranes/proximo-numero
+```
+
+```json
+{ "proximo_numero": 7 }
+```
+
+Numbers are company-scoped. Unlike invoices, albaranes do not use series by default.
+
+---
+
+## Creating an Albarán from Scratch
+
+`POST /api/albaranes`
+
+**Required fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `cliente_id` | `string` | Must belong to the company |
+| `numero` | `integer` | Unique within the company |
+| `lineas` | `array` | At least one line |
+
+**Optional fields:** `fecha`, `serie_id`, `notas`.
+
+**Line item fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `articulo_id` | `string` | Required for non-comment lines |
+| `descripcion` | `string` | Free-text description |
+| `cantidad` | `number` | Quantity |
+| `precio_unitario` | `number` | Unit price before tax |
+| `es_comentario` | `boolean` | Text-only line when `true` |
+| `linea_orden` | `integer` | Display order |
+
+Totals (`subtotal`, `iva_total`, `irpf_monto`, `total`) are computed server-side from the article's `iva_id` and the client's `regimen_irpf`.
+
+```json
+// POST /api/albaranes — example request body
+{
+  "cliente_id": "abc123",
+  "numero": 7,
+  "fecha": "2025-06-18",
+  "notas": "Entrega en almacén central",
+  "lineas": [
+    {
+      "articulo_id": "art-001",
+      "descripcion": "Servidor rack 2U",
+      "cantidad": 2,
+      "precio_unitario": 1200.00
+    }
+  ]
+}
+```
+
+```json
+// 201 Created
+{ "id": "<albaran_uuid>", "mensaje": "Albarán creado exitosamente" }
+```
+
+---
+
+## Creating an Albarán from a Quote
+
+`POST /api/albaranes/desde-presupuesto/:presupuestoId`
+
+This endpoint converts an existing presupuesto into an albarán in a single operation. The system:
+
+1. Loads the presupuesto and its detail lines.
+2. Creates an albarán with the next auto-incremented number and today's date.
+3. Copies all detail lines (quantities, prices, IVA amounts).
+4. Sets `presupuesto_origen_id` on the albarán for traceability.
+5. Marks the presupuesto as `convertida`.
+
+The presupuesto must not be in `cancelada`, `convertida`, or `aceptada` state.
+
+```json
+// 201 Created
+{
+  "id": "<albaran_uuid>",
+  "numero": 7,
+  "mensaje": "Presupuesto convertido a albarán exitosamente",
+  "albaran": { ... }
+}
+```
+
+<Tip>
+If you later delete this albarán and it was the only one linked to the presupuesto, the presupuesto is automatically restored to `borrador` state.
+</Tip>
+
+---
+
+## Updating an Albarán
+
+`PUT /api/albaranes/:id`
+
+Only albaranes in `editable` state can be updated. All existing lines are replaced atomically. Send the complete updated line set:
+
+```json
+{
+  "cliente_id": "abc123",
+  "fecha": "2025-06-19",
+  "notas": "Entrega aplazada un día",
+  "lineas": [ ... ]
+}
+```
+
+---
+
+## Updating Albarán State
+
+`PUT /api/albaranes/:id/estado`
+
+```json
+{ "estado": "entregado" }
+```
+
+Valid states: `editable`, `entregado`, `facturado`. The `facturado` state is set automatically by the invoicing endpoints — avoid setting it manually.
+
+---
+
+## Sending an Albarán by Email
+
+`POST /api/albaranes/:id/enviar-email`
+
+```json
+{
+  "destino": "cliente@empresa.es",
+  "pdf_base64": "<base64-string>",
+  "pdf_nombre": "albaran-7.pdf"
+}
+```
+
+Uses the company's SMTP configuration. Optionally supply `asunto` and `texto` to override the default subject and body.
+
+---
+
+## Invoicing a Single Albarán
+
+`POST /api/albaranes/:id/facturar`
+
+Converts one albarán into an invoice. The `albaran_linea_origen_id` is stored in each `detalles_facturas` row for traceability.
+
+**Required in body:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `numero` | `integer` | Target invoice number |
+| `forma_pago_id` | `string` | Payment method UUID |
+
+**Optional:** `fecha`, `serie_id`, `estado_factura` (`"borrador"` or `"confirmada"`, defaults to `"confirmada"`).
+
+```json
+// POST /api/albaranes/:id/facturar
+{
+  "numero": 42,
+  "fecha": "2025-06-20",
+  "serie_id": "uuid-serie-A",
+  "forma_pago_id": "uuid-forma-pago",
+  "estado_factura": "confirmada"
+}
+```
+
+```json
+// 201 Created
+{
+  "id": "<factura_uuid>",
+  "numero": 42,
+  "fecha": "2025-06-20",
+  "mensaje": "Albarán facturado exitosamente"
+}
+```
+
+If `estado_factura` is `"confirmada"`, the backend also auto-generates `facturas_vencimientos` from the `forma_pago` template in the same operation. The albarán is marked `facturado` on success.
+
+---
+
+## Grouped Invoicing (Facturación Agrupada)
+
+`POST /api/albaranes/facturar-agrupado`
+
+Group multiple albaranes — from the same client — into a single invoice. All line items from every albarán are merged in order, with a global `linea_orden` counter maintaining their sequence.
+
+**Required in body:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `albaran_ids` | `string[]` | At least one albarán UUID |
+| `numero` | `integer` | Target invoice number |
+| `forma_pago_id` | `string` | Payment method UUID |
+
+**Optional:** `fecha`, `serie_id`, `estado_factura` (`"borrador"` or `"confirmada"`).
+
+**Validation rules:**
+- All albaranes must belong to the same company.
+- All albaranes must share the same `cliente_id`.
+- None of the albaranes may already be in `facturado` state.
+
+```json
+// POST /api/albaranes/facturar-agrupado
+{
+  "albaran_ids": ["<uuid-1>", "<uuid-2>", "<uuid-3>"],
+  "numero": 43,
+  "fecha": "2025-06-30",
+  "serie_id": "uuid-serie-A",
+  "forma_pago_id": "uuid-forma-pago",
+  "estado_factura": "confirmada"
+}
+```
+
+```json
+// 201 Created
+{
+  "id": "<factura_uuid>",
+  "numero": 43,
+  "fecha": "2025-06-30",
+  "albaranes_facturados": 3,
+  "mensaje": "Albaranes facturados exitosamente"
+}
+```
+
+---
+
+## Grouped Billing Workflow
+
+<Steps>
+  <Step title="Deliver goods or services">
+    Create one albarán per delivery (`POST /api/albaranes`) and set state to `entregado` when physically dispatched.
+  </Step>
+  <Step title="Get the next invoice number">
+    Call `GET /api/facturas/proximo-numero` (optionally with `?serie=A`) to get the next available invoice number.
+  </Step>
+  <Step title="Group and invoice">
+    Call `POST /api/albaranes/facturar-agrupado` with all albarán IDs, the invoice number, and the forma de pago. Set `estado_factura` to `"confirmada"` to generate vencimientos immediately.
+  </Step>
+  <Step title="Review the merged invoice">
+    Call `GET /api/facturas/:id` to inspect the created invoice. All line items from every albarán are listed in order with their `albaran_linea_origen_id` references.
+  </Step>
+  <Step title="Send and collect">
+    Send the invoice by email (`POST /api/facturas/:id/enviar-email`) and register collections via the Invoices module when payment arrives.
+  </Step>
+</Steps>
+
+---
+
+## API Quick Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/albaranes/proximo-numero` | Next available albarán number |
+| `GET` | `/api/albaranes` | Paginated list (filters: `cliente_id`, `estado`, `desde`, `hasta`) |
+| `GET` | `/api/albaranes/:id` | Albarán detail with lines |
+| `POST` | `/api/albaranes` | Create an albarán |
+| `PUT` | `/api/albaranes/:id` | Update an albarán (editable only) |
+| `PUT` | `/api/albaranes/:id/estado` | Update albarán state |
+| `DELETE` | `/api/albaranes/:id` | Delete an albarán (not facturado) |
+| `POST` | `/api/albaranes/desde-presupuesto/:presupuestoId` | Create from a quote |
+| `POST` | `/api/albaranes/:id/facturar` | Invoice a single albarán |
+| `POST` | `/api/albaranes/facturar-agrupado` | Invoice multiple albaranes together |
+| `POST` | `/api/albaranes/:id/enviar-email` | Send PDF by email |

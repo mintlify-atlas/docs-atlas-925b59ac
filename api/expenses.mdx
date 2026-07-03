@@ -1,0 +1,251 @@
+---
+title: "Expenses API: Purchase Invoices and Cost Tracking"
+sidebarTitle: "Expenses"
+description: "REST API reference for Eme2App expenses and purchase invoices. Create, list, update, and delete expense records with supplier and VAT breakdown."
+---
+
+The Expenses API records purchase invoices and costs incurred by the business — the payable side of the ledger. Each gasto links to an optional supplier (`proveedores`), carries a reference from the supplier's invoice (`referencia_proveedor`), and supports multiple detail lines, each with its own tax type (`iva_id`) and calculated `cuota_iva`. This data feeds the IVA deductible reports and cost analysis dashboards. All endpoints require a Bearer token with a valid `empresa_id`.
+
+The router is mounted at two paths for backward compatibility:
+
+- **`/api/gastos`** — primary path
+- **`/api/facturas-compra`** — alias, identical behaviour
+
+**Authorization:** `Authorization: Bearer <token>` with `empresa_id` embedded.
+
+---
+
+## Endpoint reference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/gastos` | List expenses (paginated) |
+| POST | `/api/gastos` | Create expense |
+| GET | `/api/gastos/:id` | Get expense by ID |
+| PUT | `/api/gastos/:id` | Update expense |
+| DELETE | `/api/gastos/:id` | Delete expense |
+
+---
+
+## GET /api/gastos
+
+Returns a paginated list of expenses for the active company.
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `page` | integer | Page number (default: 1) |
+| `pageSize` | integer | Results per page (default: company setting) |
+
+**Response**
+
+```json
+{
+  "estado": "ok",
+  "datos": [
+    {
+      "id": "uuid",
+      "fecha": "2024-03-28",
+      "proveedor": "Suministros Ibérica SL",
+      "proveedor_id": "uuid",
+      "referencia_proveedor": "FRA-2024-0123",
+      "concepto": "Material de oficina",
+      "base_imponible": "250.00",
+      "cuota_iva": "52.50",
+      "total": "302.50",
+      "estado": true
+    }
+  ],
+  "paginacion": { "page": 1, "pageSize": 25, "total": 64 }
+}
+```
+
+---
+
+## POST /api/gastos
+
+Creates a new expense record. The server validates that all required fields are present and that every detail line has a positive `base_imponible`.
+
+<ParamField body="fecha" type="string (YYYY-MM-DD)" required>
+  Date of the supplier's invoice. Format must be `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField body="proveedor_id" type="string (UUID)">
+  ID of an existing `proveedores` record. Required if `proveedor` (free-text) is not provided.
+</ParamField>
+
+<ParamField body="proveedor" type="string">
+  Free-text supplier name. Used when the supplier is not in the catalogue. Required if `proveedor_id` is not provided.
+</ParamField>
+
+<ParamField body="referencia_proveedor" type="string" required>
+  Supplier's own invoice number. Max 20 characters. Used for duplicate detection and cross-reference.
+</ParamField>
+
+<ParamField body="estado" type="boolean">
+  Active/inactive flag. Defaults to `true`.
+</ParamField>
+
+<ParamField body="detalles" type="array">
+  Array of expense detail lines. If omitted, the server builds a single-line detail from the top-level `concepto` and `base_imponible` fields.
+  <Expandable title="Detail line fields">
+    <ParamField body="concepto" type="string" required>
+      Description of the expense item. Required for each line.
+    </ParamField>
+    <ParamField body="base_imponible" type="decimal" required>
+      Net taxable amount. Must be greater than 0.
+    </ParamField>
+    <ParamField body="iva_id" type="string (UUID)">
+      IVA rate to apply from the `iva` catalogue. If omitted, `cuota_iva` defaults to 0.
+    </ParamField>
+    <ParamField body="cuota_iva" type="decimal">
+      Explicit IVA amount. Overrides the calculated value when `modo_calculo` is `"persistido"` or `"total"`.
+    </ParamField>
+    <ParamField body="total" type="decimal">
+      Line total (base + IVA). Used when `modo_calculo` is `"total"`.
+    </ParamField>
+    <ParamField body="modo_calculo" type="string">
+      Determines how `cuota_iva` is resolved. One of `"base"` (default — calculated from `iva_id`), `"total"` (back-calculated from total), or `"persistido"` (use `cuota_iva` as-is).
+    </ParamField>
+    <ParamField body="linea_orden" type="integer">
+      Display order. Auto-assigned by index if omitted.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="concepto" type="string">
+  Top-level convenience field. Used as the single detail line's `concepto` when `detalles` is not provided.
+</ParamField>
+
+<ParamField body="base_imponible" type="decimal">
+  Top-level convenience field. Used as the single detail line's `base_imponible` when `detalles` is not provided.
+</ParamField>
+
+<ParamField body="iva_id" type="string (UUID)">
+  Top-level IVA rate. Used when `detalles` is not provided.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "estado": "ok",
+  "mensaje": "Gasto creado correctamente",
+  "datos": {
+    "id": "e5f6a7b8-0000-0000-0000-000000000004",
+    "fecha": "2024-03-28",
+    "proveedor": "Suministros Ibérica SL",
+    "proveedor_id": null,
+    "referencia_proveedor": "FRA-2024-0123",
+    "base_imponible": "250.00",
+    "cuota_iva": "52.50",
+    "total": "302.50",
+    "detalles": [
+      {
+        "id": "uuid",
+        "concepto": "Material de oficina",
+        "base_imponible": "250.00",
+        "cuota_iva": "52.50",
+        "total": "302.50",
+        "linea_orden": 1
+      }
+    ]
+  }
+}
+```
+
+**curl example**
+
+```bash
+curl -s -X POST https://api.eme2app.com/api/gastos \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "fecha": "2024-03-28",
+    "proveedor": "Suministros Ibérica SL",
+    "referencia_proveedor": "FRA-2024-0123",
+    "detalles": [
+      {
+        "concepto": "Material de oficina",
+        "base_imponible": 250.00,
+        "iva_id": "iva-uuid-21pct"
+      }
+    ]
+  }'
+```
+
+**Validation rules**
+
+| Rule | Error message |
+|------|---------------|
+| `fecha` missing or wrong format | `"La fecha es requerida y debe estar en formato YYYY-MM-DD"` |
+| Neither `proveedor_id` nor `proveedor` provided | `"El proveedor es requerido"` |
+| `referencia_proveedor` missing | `"La referencia del proveedor es requerida"` |
+| `referencia_proveedor` > 20 chars | `"La referencia del proveedor no puede exceder 20 caracteres"` |
+| No detail lines resolved | `"Debes indicar al menos un concepto"` |
+| Any detail missing `concepto` | `"Todos los conceptos deben tener descripción"` |
+| Any detail with `base_imponible` ≤ 0 | `"La base imponible de cada concepto debe ser mayor a 0"` |
+
+---
+
+## GET /api/gastos/:id
+
+Returns a single expense with all its detail lines.
+
+**Response**
+
+```json
+{
+  "estado": "ok",
+  "datos": {
+    "id": "uuid",
+    "fecha": "2024-03-28",
+    "proveedor": "Suministros Ibérica SL",
+    "referencia_proveedor": "FRA-2024-0123",
+    "base_imponible": "250.00",
+    "cuota_iva": "52.50",
+    "total": "302.50",
+    "estado": true,
+    "detalles": [ { "id": "uuid", "concepto": "Material de oficina", "base_imponible": "250.00", "cuota_iva": "52.50", "total": "302.50", "linea_orden": 1 } ]
+  }
+}
+```
+
+---
+
+## PUT /api/gastos/:id
+
+Full update of an expense. The request body mirrors `POST /api/gastos`. Detail lines are replaced entirely.
+
+**Response**
+
+```json
+{
+  "estado": "ok",
+  "mensaje": "Gasto actualizado correctamente",
+  "datos": { /* updated expense object */ }
+}
+```
+
+---
+
+## DELETE /api/gastos/:id
+
+Permanently deletes the expense and all its detail lines.
+
+**Response**
+
+```json
+{
+  "estado": "ok",
+  "mensaje": "Gasto eliminado correctamente"
+}
+```
+
+**Error responses**
+
+| Status | mensaje |
+|--------|---------|
+| 404 | `"Gasto no encontrado"` |
+| 500 | `"Error al eliminar gasto"` |

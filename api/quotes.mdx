@@ -1,0 +1,295 @@
+---
+title: "Quotes API: Create, Accept, and Convert to Invoices"
+sidebarTitle: "Quotes"
+description: "REST API reference for Eme2App quotes (presupuestos). Create budgets, update status, accept to generate a draft invoice, and send by email."
+---
+
+Presupuestos (quotes) are the starting point of Eme2App's sales workflow. You can create a budget, share it with a client by email, and — once accepted — convert it directly into a `borrador` factura with a single API call. Quotes go through their own lifecycle: `borrador` → `emitida` → `pagada` or `cancelada`; acceptance also sets the status to `aceptada` and locks the quote from further editing. All endpoints require a Bearer token with a valid `empresa_id`.
+
+**Base path:** `/api/presupuestos`
+
+**Authorization:** `Authorization: Bearer <token>` with `empresa_id` embedded.
+
+---
+
+## Endpoint reference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/presupuestos` | List quotes (paginated) |
+| POST | `/api/presupuestos` | Create quote |
+| GET | `/api/presupuestos/proximo-numero` | Next available quote number |
+| GET | `/api/presupuestos/:id` | Get quote by ID |
+| PUT | `/api/presupuestos/:id` | Update quote |
+| PUT | `/api/presupuestos/:id/estado` | Update quote status |
+| POST | `/api/presupuestos/:id/aceptar` | Accept quote → create draft invoice |
+| DELETE | `/api/presupuestos/:id` | Delete quote |
+| POST | `/api/presupuestos/:id/enviar-email` | Send PDF by email |
+
+---
+
+## GET /api/presupuestos
+
+Returns a paginated list of quotes for the active company.
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `page` | integer | Page number (default: 1) |
+| `pageSize` | integer | Results per page (default: company setting) |
+
+**Response**
+
+```json
+{
+  "datos": [
+    {
+      "id": "uuid",
+      "numero": 12,
+      "fecha": "2024-03-10",
+      "cliente_id": "uuid",
+      "estado": "emitida",
+      "incluir_impuestos": true,
+      "subtotal": "800.00",
+      "iva_monto": "168.00",
+      "irpf_monto": "0.00",
+      "total": "968.00"
+    }
+  ],
+  "paginacion": { "page": 1, "pageSize": 25, "total": 28 }
+}
+```
+
+---
+
+## POST /api/presupuestos
+
+Creates a new quote in `borrador` status. Tax amounts (IVA, IRPF) are computed server-side from the article catalogue.
+
+<ParamField body="cliente_id" type="string (UUID)" required>
+  ID of the client for this quote. Must belong to the active company.
+</ParamField>
+
+<ParamField body="numero" type="integer" required>
+  Quote number. Must be unique within the company. Use `GET /api/presupuestos/proximo-numero` to fetch the next available value.
+</ParamField>
+
+<ParamField body="fecha" type="string (YYYY-MM-DD)">
+  Quote date. Defaults to today if omitted.
+</ParamField>
+
+<ParamField body="incluir_impuestos" type="boolean">
+  Whether to calculate and display taxes (IVA, IRPF). Defaults to `true`. Set `false` for net-amount quotes.
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Free-text notes. Max 1000 characters.
+</ParamField>
+
+<ParamField body="detalles" type="array" required>
+  Array of quote line items. At least one non-comment line is required.
+  <Expandable title="Line item fields">
+    <ParamField body="articulo_id" type="string (UUID)" required>
+      Article/product ID. Drives IVA rate and IRPF lookups. Required for non-comment lines.
+    </ParamField>
+    <ParamField body="cantidad" type="decimal" required>
+      Quantity.
+    </ParamField>
+    <ParamField body="precio_unitario" type="decimal" required>
+      Unit price before tax.
+    </ParamField>
+    <ParamField body="descripcion" type="string">
+      Override description for this line.
+    </ParamField>
+    <ParamField body="es_comentario" type="boolean">
+      `true` to insert a text-only comment line (no article, zero amounts).
+    </ParamField>
+    <ParamField body="linea_orden" type="integer">
+      Display order. Auto-assigned by array index if omitted.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+**Response**
+
+```json
+{
+  "id": "b2c3d4e5-0000-0000-0000-000000000002",
+  "mensaje": "Presupuesto creado exitosamente"
+}
+```
+
+**curl example**
+
+```bash
+curl -s -X POST https://api.eme2app.com/api/presupuestos \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "cliente_id": "ccc11111-0000-0000-0000-000000000001",
+    "numero": 13,
+    "fecha": "2024-04-01",
+    "incluir_impuestos": true,
+    "notas": "Oferta válida 30 días",
+    "detalles": [
+      {
+        "articulo_id": "aaa00000-0000-0000-0000-000000000001",
+        "cantidad": 10,
+        "precio_unitario": 80.00,
+        "descripcion": "Módulo de desarrollo"
+      }
+    ]
+  }'
+```
+
+---
+
+## GET /api/presupuestos/proximo-numero
+
+Returns the next sequential quote number for the active company.
+
+**Response**
+
+```json
+{ "proximo_numero": 14 }
+```
+
+---
+
+## GET /api/presupuestos/:id
+
+Returns a single quote with its header and all line details.
+
+---
+
+## PUT /api/presupuestos/:id
+
+Full update of a quote. Only quotes in `borrador` state can be edited. The body mirrors `POST /api/presupuestos`. Existing line items are replaced entirely.
+
+**Response**
+
+```json
+{
+  "id": "b2c3d4e5-0000-0000-0000-000000000002",
+  "mensaje": "Presupuesto actualizado exitosamente"
+}
+```
+
+---
+
+## PUT /api/presupuestos/:id/estado
+
+Manually updates the quote status.
+
+<ParamField body="estado" type="string" required>
+  Target status. Allowed values: `"borrador"`, `"emitida"`, `"pagada"`, `"cancelada"`.
+</ParamField>
+
+**Response**
+
+```json
+{ "mensaje": "Presupuesto actualizado a estado: emitida" }
+```
+
+---
+
+## POST /api/presupuestos/:id/aceptar
+
+Accepts the quote and creates a linked `borrador` factura in a single operation. The quote is marked `aceptada` and locked. Quotes in `cancelada`, `aceptada`, or `convertida` states are rejected.
+
+<ParamField body="numero" type="integer" required>
+  Invoice number to assign to the new factura. Use `GET /api/facturas/proximo-numero` to fetch the next available value.
+</ParamField>
+
+<ParamField body="fecha" type="string (YYYY-MM-DD)">
+  Invoice date. Defaults to today.
+</ParamField>
+
+<ParamField body="serie_id" type="string (UUID)">
+  Invoice series to use. Required when the company has `usa_series = true`.
+</ParamField>
+
+<ParamField body="serie" type="string">
+  Series code. Alternative to `serie_id`.
+</ParamField>
+
+<ParamField body="forma_pago_id" type="string (UUID)">
+  Payment terms for the invoice. If omitted, falls back to the client's `forma_pago_defecto_id`.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "id": "a1b2c3d4-0000-0000-0000-000000000009",
+  "numero": 44,
+  "fecha": "2024-04-02",
+  "mensaje": "Presupuesto aceptado. Factura borrador creada."
+}
+```
+
+<ResponseField name="id" type="string">
+  UUID of the newly created `facturas` record.
+</ResponseField>
+
+<ResponseField name="numero" type="integer">
+  Invoice number assigned to the new factura.
+</ResponseField>
+
+<Tip>
+After `aceptar`, retrieve the full invoice with `GET /api/facturas/{id}`, review its lines, then confirm it with `PUT /api/facturas/{id}/estado` (`{"estado":"confirmada"}`) to generate payment vencimientos.
+</Tip>
+
+**Error responses**
+
+| Status | mensaje |
+|--------|---------|
+| 400 | `"Este presupuesto no se puede aceptar"` (already accepted, cancelled, or converted) |
+| 400 | `"Debes indicar un número de factura válido"` |
+| 400 | `"El número de factura ya existe"` |
+| 400 | `"Cliente debe tener una forma de pago defecto o debe proporcionar una forma_pago_id"` |
+
+---
+
+## DELETE /api/presupuestos/:id
+
+Permanently deletes a quote. Only quotes in `borrador` state can be deleted.
+
+**Response**
+
+```json
+{ "mensaje": "Presupuesto eliminado" }
+```
+
+---
+
+## POST /api/presupuestos/:id/enviar-email
+
+Sends the quote PDF to a recipient email address.
+
+<ParamField body="destino" type="string" required>
+  Recipient email address.
+</ParamField>
+
+<ParamField body="pdf_base64" type="string" required>
+  Base64-encoded PDF generated client-side.
+</ParamField>
+
+<ParamField body="pdf_nombre" type="string">
+  Attachment filename. Defaults to `presupuesto-{numero}.pdf`.
+</ParamField>
+
+<ParamField body="asunto" type="string">
+  Email subject. Defaults to `"Presupuesto {numero}"`.
+</ParamField>
+
+<ParamField body="texto" type="string">
+  Plain-text email body.
+</ParamField>
+
+**Response**
+
+```json
+{ "mensaje": "Presupuesto enviado a cliente@empresa.com" }
+```

@@ -1,0 +1,85 @@
+---
+title: "Eme2App: Invoicing Platform for Spanish Businesses"
+sidebarTitle: "Introduction"
+description: "Eme2App is a full-stack invoicing and budgeting SaaS covering invoices, quotes, delivery notes, expenses, treasury, PDF design, and AEAT tax validation for Spanish companies."
+---
+
+Eme2App is a full-stack invoicing and budgeting SaaS built specifically for Spanish businesses. It handles the complete billing lifecycle — from issuing quotes and delivery notes to generating tax-compliant invoices, tracking expenses, monitoring treasury movements, and submitting validated data to the Agencia Estatal de Administración Tributaria (AEAT). Whether you run a single company or manage multiple *empresas* under one account, Eme2App gives every role — from a platform superadmin to a company-level user — precisely the access they need, without the overhead of a generic ERP.
+
+## Key modules
+
+Eme2App is organised into purpose-built modules that map directly to the day-to-day workflows of a Spanish SME:
+
+| Module | Purpose |
+|---|---|
+| **Auth & Usuarios** | JWT-based authentication, role assignment, and session management |
+| **Empresa** | Company profile, fiscal data, and multi-company workspace setup |
+| **Clientes** | Customer registry with fiscal and contact information |
+| **Proveedores** | Supplier management linked to purchase invoices and expenses |
+| **Artículos** | Product and service catalogue with pricing and IVA rates |
+| **IVA** | VAT type configuration (general, reduced, super-reduced, exempt) |
+| **Régimen Fiscal & IRPF** | Fiscal regime and withholding tax settings per company |
+| **Formas & Instrumentos de Pago** | Payment method and instrument catalogues |
+| **Series de Facturas** | Invoice numbering series per company and document type |
+| **Facturas** | Sales invoice issuance, line items, IVA breakdown, PDF export |
+| **Presupuestos** | Quote management with one-click conversion to invoice |
+| **Albaranes** | Delivery note tracking convertible to invoice |
+| **Gastos / Facturas de Compra** | Purchase invoice and expense recording |
+| **Tesorería** | Cash flow and treasury movement tracking |
+| **Informes** | Business reporting and revenue/expense analytics |
+| **PDF Designer** | WYSIWYG per-section editor with live preview, tokens, and style controls |
+| **AEAT** | Spanish tax authority data validation and submission tooling |
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| **Frontend** | React 19 + Vite 7, Tailwind CSS 4, TipTap rich-text editor, Recharts |
+| **Backend** | Node.js (≥ 20.19.0) + Express 4, ES Modules |
+| **Authentication** | JSON Web Tokens (`jsonwebtoken`) + password hashing (`bcryptjs`) |
+| **Database** | PostgreSQL (Supabase-compatible) via `pg` pool + Prisma Client with `@prisma/adapter-pg` |
+| **PDF generation** | jsPDF + jsPDF-AutoTable (frontend and backend) |
+| **PWA** | `vite-plugin-pwa` — installable on desktop and mobile |
+| **Testing** | Vitest + Testing Library (frontend), Vitest + Supertest (backend) |
+| **Deployment** | Vercel (frontend as Vite app, backend as serverless Express) |
+
+## Roles and permissions
+
+Eme2App uses a three-tier role model enforced at the API level via middleware (`verificarRol`):
+
+- **`superadmin`** — Platform-wide administrator. Accesses `/api/adminapp/*` routes; manages all companies and users across the system.
+- **`admin`** — Company-level administrator. Full access to all business modules within an *empresa*: clients, suppliers, invoices, reports, user management, and settings.
+- **`user`** — Standard operator within a company. Can work with clients, suppliers, articles, invoices, quotes, delivery notes, expenses, and treasury — read and write — but cannot administer company settings or other users.
+
+## Multi-company architecture
+
+A single Eme2App user account can belong to multiple *empresas*. When a user authenticates and selects a company workspace, the issued JWT carries an `empresa_id` claim. Every protected API route verifies both the user's identity and their active *empresa* context via the `verificarEmpresaActiva` middleware, ensuring strict data isolation between companies in the same database.
+
+## PDF Designer
+
+The PDF Designer lets admins build fully branded invoice and quote templates without writing code. Features include:
+
+- WYSIWYG per-section editor (header, body, footer) with bold, italic, underline, colour, font family, and font size controls
+- Reusable style toolbar shared across all section editors
+- Independent style settings for the header and the line-item detail table
+- Live preview that updates as you edit
+- Merge tokens for company (`{{empresa.nombre_comercial}}`, `{{empresa.codigo_postal}}`), client (`{{cliente.codigo_postal}}`), and document data
+
+---
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run Eme2App locally in under 10 minutes with PostgreSQL or Supabase.
+  </Card>
+  <Card title="Deployment" icon="cloud" href="/deployment">
+    Deploy the backend and frontend as separate Vercel projects connected to Supabase.
+  </Card>
+  <Card title="Core Modules" icon="cube" href="/modules">
+    Deep-dive into invoices, quotes, delivery notes, expenses, and treasury.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/authentication">
+    Full reference for every `/api/*` endpoint, request shapes, and auth requirements.
+  </Card>
+</CardGroup>

@@ -1,72 +1,102 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "Eme2App",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
-  },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "primary": "#3b82f6",
+    "light": "#eff6ff",
+    "dark": "#1A1A2E"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/eme2dev/Eme2App"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/eme2dev/Eme2App"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "deployment"
+            ]
+          },
+          {
+            "group": "Core Modules",
+            "pages": [
+              "modules/invoices",
+              "modules/quotes",
+              "modules/delivery-notes",
+              "modules/expenses",
+              "modules/treasury"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/company",
+              "configuration/users-roles",
+              "configuration/pdf-designer",
+              "configuration/fiscal-settings"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/aeat",
+              "integrations/email-smtp",
+              "integrations/reports-export"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Business Resources",
+            "pages": [
+              "api/invoices",
+              "api/quotes",
+              "api/delivery-notes",
+              "api/expenses",
+              "api/treasury"
+            ]
+          },
+          {
+            "group": "Master Data",
+            "pages": [
+              "api/clients",
+              "api/suppliers",
+              "api/articles",
+              "api/company"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "api/users",
+              "api/adminapp"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

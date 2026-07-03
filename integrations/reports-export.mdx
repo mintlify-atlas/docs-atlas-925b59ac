@@ -1,0 +1,350 @@
+---
+title: "Reports and Data Export: Excel, PDF, and IVA Summaries"
+sidebarTitle: "Reports & Export"
+description: "Generate financial reports in Eme2App including invoice summaries, IVA declarations, expense reports, treasury cash flow, and export to Excel or PDF."
+---
+
+Eme2App's reporting module gives you a consolidated view of your business finances through six report types covering invoices, quotes, expenses, VAT obligations, and treasury. Every report is available as a paginated JSON response for in-app display, and can be downloaded as a formatted **Excel (.xlsx)** or **PDF** file with a single extra path segment. Reports share a common set of filter parameters — date ranges, client, status, and more — so the same query string that populates a chart in the UI can be reused directly in a download request.
+
+## Authentication and authorization
+
+All report endpoints are mounted under `/api/informes` and share the following requirements (applied globally in `server.js`):
+
+- Valid **JWT bearer token** in the `Authorization` header.
+- Active empresa context (`verificarEmpresaActiva`).
+- Role **`admin`** or **`user`**.
+
+```http
+Authorization: Bearer <your_jwt_token>
+```
+
+---
+
+## Shared filter parameters
+
+<Note>
+  All report endpoints — `/api/informes/facturas`, `/presupuestos`, `/gastos`, `/iva`, and `/tesoreria` — accept the same set of query parameters for filtering. You can combine any subset of them in a single request. Omitting a filter returns all records for the active empresa.
+</Note>
+
+| Parameter      | Type            | Description                                                              |
+|----------------|-----------------|--------------------------------------------------------------------------|
+| `fecha_desde`  | string (date)   | Start date in `YYYY-MM-DD` format.                                       |
+| `fecha_hasta`  | string (date)   | End date in `YYYY-MM-DD` format.                                         |
+| `year`         | integer         | Filter by calendar year (e.g. `2024`). Can be combined with `months`.    |
+| `months`       | string          | Comma-separated month numbers (e.g. `1,2,3` for Q1). Requires `year`.   |
+| `estado`       | string          | Document status (e.g. `emitida`, `pagada`, `pendiente`, `vencida`).      |
+| `cliente_id`   | string (UUID)   | Filter by a specific cliente.                                            |
+| `proveedor_id` | string (UUID)   | Filter by a specific proveedor (used in gastos report).                  |
+| `serie`        | string          | Invoice series code.                                                     |
+| `iva_id`       | string (UUID)   | Filter by a specific IVA rate ID.                                        |
+| `pagina`       | integer         | Page number (1-based). Defaults to `1`.                                  |
+| `pagina_size`  | integer         | Records per page. Export endpoints override this to `10000` internally.  |
+
+---
+
+## Report endpoints
+
+| Endpoint | Description | Excel | PDF |
+|---|---|:---:|:---:|
+| `GET /api/informes/facturas` | Invoice report with totals, subtotals by state, and chart data | ✅ | ✅ |
+| `GET /api/informes/presupuestos` | Quote/estimate report with conversion and status breakdown | ✅ | ✅ |
+| `GET /api/informes/gastos` | Purchase expense report grouped by supplier and period | ✅ | ✅ |
+| `GET /api/informes/iva` | VAT report: repercutido vs soportado by fiscal period | ✅ | ✅ |
+| `GET /api/informes/tesoreria` | Treasury report: outstanding due dates and balances | ✅ | ✅ |
+| `GET /api/informes/tesoreria/flujo` | Cash flow timeline: expected vs actual monthly collections | ❌ | ❌ |
+| `GET /api/informes/exportar/:tipo/excel` | Download Excel for any of the five exportable types | — | — |
+| `GET /api/informes/exportar/:tipo/pdf` | Download PDF for any of the five exportable types | — | — |
+
+---
+
+## GET /api/informes/facturas
+
+Returns a paginated invoice report for the active empresa. Includes per-page records, subtotals broken down by status, an overall total, summary statistics, and chart-ready data arrays.
+
+```bash
+curl "https://your-eme2app.com/api/informes/facturas?fecha_desde=2024-01-01&fecha_hasta=2024-12-31&estado=pagada" \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response shape:**
+
+```json
+{
+  "estado": "ok",
+  "datos": [ /* array of invoice records */ ],
+  "total": 142,
+  "pagina": 1,
+  "pagina_size": 20,
+  "subtotales": { "pagada": 18500.00, "pendiente": 4200.00 },
+  "totalGeneral": { "base": 22700.00, "iva": 4767.00, "total": 27467.00 },
+  "resumen": { /* summary KPIs */ },
+  "chartData": [ /* monthly series for charts */ ],
+  "chartEstado": [ /* status distribution for pie charts */ ]
+}
+```
+
+---
+
+## GET /api/informes/presupuestos
+
+Returns the quote/estimate report. Shares the same response shape as the facturas report, including `chartEstado` for visualizing acceptance vs rejection ratios.
+
+```bash
+curl "https://your-eme2app.com/api/informes/presupuestos?year=2024&months=10,11,12" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## GET /api/informes/gastos
+
+Returns the purchase expense report, filterable by supplier (`proveedor_id`), date range, or IVA rate. Includes `chartData` for a monthly expense trend visualization.
+
+```bash
+curl "https://your-eme2app.com/api/informes/gastos?fecha_desde=2024-01-01&fecha_hasta=2024-03-31" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## GET /api/informes/iva
+
+Returns the **IVA (VAT) report** grouped by fiscal period, with a split between:
+
+- **Repercutido** — output VAT collected on issued invoices (facturas emitidas).
+- **Soportado** — input VAT paid on expenses and purchase invoices (gastos / facturas de compra).
+
+The `resultado` field in the response represents the net VAT position (repercutido minus soportado) for the requested period, which corresponds to what is declared in the quarterly **Modelo 303**.
+
+```bash
+curl "https://your-eme2app.com/api/informes/iva?year=2024&months=1,2,3" \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response shape:**
+
+```json
+{
+  "estado": "ok",
+  "datos": [ /* period-level IVA breakdown records */ ],
+  "total": 4,
+  "resultado": 1820.50,
+  "repercutido": 4767.00,
+  "soportado": 2946.50,
+  "chartData": [ /* quarterly chart series */ ]
+}
+```
+
+<Note>
+  The `months` parameter is especially useful for the IVA report to isolate individual tax quarters. For Q1 use `months=1,2,3`, Q2 use `months=4,5,6`, Q3 use `months=7,8,9`, and Q4 use `months=10,11,12`. Always include the `year` parameter when using `months`.
+</Note>
+
+---
+
+## GET /api/informes/tesoreria
+
+Returns the treasury report, including outstanding due dates (`vencimientosPendientes`), balance summary, and chart-ready data for cash position visualization.
+
+```bash
+curl "https://your-eme2app.com/api/informes/tesoreria?fecha_desde=2024-01-01&fecha_hasta=2024-12-31" \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response shape:**
+
+```json
+{
+  "estado": "ok",
+  "datos": [ /* treasury entries */ ],
+  "total": 38,
+  "pagina": 1,
+  "pagina_size": 20,
+  "vencimientosPendientes": [ /* upcoming due dates */ ],
+  "resumen": { /* balance totals */ },
+  "chartData": [ /* monthly cash position series */ ]
+}
+```
+
+---
+
+## GET /api/informes/tesoreria/flujo
+
+Returns the **cash flow timeline**, showing a month-by-month view of expected collections (from pending invoices) versus actual collections (from paid invoices). This is distinct from the base treasury report — it focuses on liquidity projection rather than balance snapshot.
+
+```bash
+curl "https://your-eme2app.com/api/informes/tesoreria/flujo?year=2024" \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response shape:**
+
+```json
+{
+  "estado": "ok",
+  "flujoMensual": [
+    {
+      "mes": "2024-01",
+      "cobrado": 8200.00,
+      "pendiente": 3500.00
+    }
+  ],
+  "resumen": {
+    "total_cobrado": 62400.00,
+    "total_pendiente": 14200.00
+  }
+}
+```
+
+The cash flow endpoint does **not** support Excel or PDF export — use the base `/tesoreria` endpoint for downloadable treasury reports.
+
+---
+
+## Exporting to Excel and PDF
+
+Any of the five main report types can be downloaded as a formatted file by appending `/exportar/:tipo/:formato` to the base path. The same filter query parameters apply.
+
+```
+GET /api/informes/exportar/:tipo/excel
+GET /api/informes/exportar/:tipo/pdf
+```
+
+**Valid `:tipo` values:** `facturas` | `presupuestos` | `gastos` | `iva` | `tesoreria`
+
+The server internally overrides pagination to `pagina_size=10000` for exports to include the full dataset regardless of what `pagina_size` the caller sent.
+
+**Response headers for Excel:**
+
+```
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+Content-Disposition: attachment; filename="informe-facturas_2024-07-15.xlsx"
+```
+
+**Response headers for PDF:**
+
+```
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="informe-facturas_2024-07-15.pdf"
+```
+
+The filename always includes today's date in `YYYY-MM-DD` format.
+
+### Export examples
+
+<Tabs>
+  <Tab title="Excel">
+    **Invoice report — full year 2024:**
+
+    ```bash
+    curl "https://your-eme2app.com/api/informes/exportar/facturas/excel?year=2024" \
+      -H "Authorization: Bearer <token>" \
+      --output informe-facturas-2024.xlsx
+    ```
+
+    **IVA report — Q1 2024:**
+
+    ```bash
+    curl "https://your-eme2app.com/api/informes/exportar/iva/excel?year=2024&months=1,2,3" \
+      -H "Authorization: Bearer <token>" \
+      --output iva-q1-2024.xlsx
+    ```
+
+    **Expense report — date range:**
+
+    ```bash
+    curl "https://your-eme2app.com/api/informes/exportar/gastos/excel?fecha_desde=2024-01-01&fecha_hasta=2024-06-30" \
+      -H "Authorization: Bearer <token>" \
+      --output gastos-h1-2024.xlsx
+    ```
+
+    **Treasury report:**
+
+    ```bash
+    curl "https://your-eme2app.com/api/informes/exportar/tesoreria/excel?year=2024" \
+      -H "Authorization: Bearer <token>" \
+      --output tesoreria-2024.xlsx
+    ```
+  </Tab>
+  <Tab title="PDF">
+    **Invoice report — full year 2024:**
+
+    ```bash
+    curl "https://your-eme2app.com/api/informes/exportar/facturas/pdf?year=2024" \
+      -H "Authorization: Bearer <token>" \
+      --output informe-facturas-2024.pdf
+    ```
+
+    **IVA report — Q3 2024:**
+
+    ```bash
+    curl "https://your-eme2app.com/api/informes/exportar/iva/pdf?year=2024&months=7,8,9" \
+      -H "Authorization: Bearer <token>" \
+      --output iva-q3-2024.pdf
+    ```
+
+    **Quote report — by client:**
+
+    ```bash
+    curl "https://your-eme2app.com/api/informes/exportar/presupuestos/pdf?cliente_id=uuid-here&year=2024" \
+      -H "Authorization: Bearer <token>" \
+      --output presupuestos-cliente-2024.pdf
+    ```
+  </Tab>
+</Tabs>
+
+### Passing an unsupported format
+
+If `:formato` is anything other than `excel` or `pdf`, the API returns:
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Formato no soportado. Use \"excel\" o \"pdf\""
+}
+```
+
+---
+
+## IVA report — quarterly workflow
+
+<Steps>
+  <Step title="Pull the quarterly IVA data">
+    Request the report for the desired quarter using `year` and `months`. For Q2 2024:
+
+    ```bash
+    curl "https://your-eme2app.com/api/informes/iva?year=2024&months=4,5,6" \
+      -H "Authorization: Bearer <token>"
+    ```
+  </Step>
+  <Step title="Review repercutido vs soportado">
+    Check the `repercutido` (output VAT from your invoices) and `soportado` (input VAT from your expenses) totals in the response. The `resultado` field gives you the net amount to declare.
+  </Step>
+  <Step title="Export for your tax advisor">
+    Download the period data as Excel or PDF for submission to your asesoría fiscal:
+
+    ```bash
+    curl "https://your-eme2app.com/api/informes/exportar/iva/excel?year=2024&months=4,5,6" \
+      -H "Authorization: Bearer <token>" \
+      --output modelo303-q2-2024.xlsx
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Error responses
+
+All report endpoints return a consistent error envelope:
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Error al obtener informe de facturas"
+}
+```
+
+| HTTP status | Cause |
+|-------------|-------|
+| `400` | Invalid `:tipo` or `:formato` in export URL |
+| `401` | Missing or expired JWT |
+| `403` | Role not `admin` or `user`; or no active empresa |
+| `500` | Internal server error (database query or file generation failure) |

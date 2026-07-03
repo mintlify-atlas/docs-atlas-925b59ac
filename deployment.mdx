@@ -1,0 +1,215 @@
+---
+title: "Deploy Eme2App to Vercel with Supabase"
+sidebarTitle: "Deployment"
+description: "Step-by-step guide to deploying Eme2App's Express backend and React frontend as separate Vercel projects connected to a Supabase PostgreSQL database."
+---
+
+Eme2App deploys as two independent Vercel projects — one for the Express API backend and one for the React + Vite frontend — both pointing at the same Supabase PostgreSQL database. The backend runs as a serverless Express app via `backend/api/index.js`, and `backend/vercel.json` rewrites every incoming request through that single entry point. Splitting the projects lets you scale, redeploy, and configure each layer independently, and it means CORS only needs to allowlist the known frontend origin.
+
+## Recommended deployment order
+
+Before diving into the steps, keep this sequence in mind:
+
+1. **Deploy the backend first** — you need its public URL before the frontend can be configured.
+2. **Copy the backend URL** and deploy the frontend with `VITE_API_URL` pointing at it.
+3. **Copy the frontend URL**, set it as `FRONTEND_URL` on the backend, and redeploy the backend to activate the correct CORS policy.
+
+---
+
+<Steps>
+
+  <Step title="Create a Supabase project">
+    If you do not already have a PostgreSQL database, create a free project at [supabase.com](https://supabase.com). Once the project is provisioned:
+
+    1. Go to **Project Settings → Database → Connection string**.
+    2. Select the **Transaction pooler** tab (port `6543`) — this is the value for `SUPABASE_POOLER_URL`.
+    3. Copy the connection string and keep it ready for the backend environment variables.
+
+    <Note>
+      The backend bootstraps the entire schema on first cold start, so you do not need to run any migrations or SQL scripts manually in Supabase before deploying.
+    </Note>
+  </Step>
+
+  <Step title="Deploy the backend to Vercel">
+    Create a new Vercel project and point it at the `backend/` subdirectory.
+
+    **Project configuration:**
+
+    | Setting | Value |
+    |---|---|
+    | **Root Directory** | `backend` |
+    | **Framework Preset** | Other |
+    | **Build Command** | *(leave empty, or set* `npm install` *)* |
+    | **Output Directory** | *(leave empty)* |
+
+    The backend's `vercel.json` rewrites all routes to `backend/api/index.js` — no additional Vercel routing configuration is needed.
+
+    **Required environment variables:**
+
+    ```env
+    # Database — use the Supabase Transaction Pooler URL
+    SUPABASE_POOLER_URL=postgresql://postgres:password@aws-0-region.pooler.supabase.com:6543/postgres?sslmode=require
+
+    # SSL (required for Supabase)
+    DB_SSL=true
+    DB_SSL_REJECT_UNAUTHORIZED=true
+
+    # Auth
+    JWT_SECRET=your_long_random_secret_here
+    JWT_EXPIRE=7d
+
+    # CORS — set this to your frontend Vercel URL once it is known
+    FRONTEND_URL=https://your-frontend.vercel.app
+
+    # Runtime
+    NODE_ENV=production
+    ```
+
+    <Warning>
+      If you do not yet know your frontend URL, deploy the backend first with a placeholder in `FRONTEND_URL`, then update it after the frontend is deployed and redeploy the backend. Without the correct `FRONTEND_URL` the browser will receive CORS errors.
+    </Warning>
+
+    After Vercel finishes building, verify the deployment with the health endpoint:
+
+    ```bash
+    curl https://your-backend.vercel.app/api/health
+    ```
+
+    Expected response:
+
+    ```json
+    {
+      "estado": "ok",
+      "mensaje": "Backend funcionando correctamente",
+      "hora": "2025-01-01T12:00:00.000Z"
+    }
+    ```
+
+    You can also check the deployed version:
+
+    ```bash
+    curl https://your-backend.vercel.app/api/version
+    ```
+
+    <Note>
+      Every cold start initialises the PostgreSQL connection pool and auto-bootstraps the schema. The first request after a cold start may take a second or two longer than subsequent requests while the pool warms up.
+    </Note>
+  </Step>
+
+  <Step title="Deploy the frontend to Vercel">
+    Create a second Vercel project pointed at the `frontend/` subdirectory.
+
+    **Project configuration:**
+
+    | Setting | Value |
+    |---|---|
+    | **Root Directory** | `frontend` |
+    | **Framework Preset** | Vite |
+    | **Build Command** | `npm run build` |
+    | **Output Directory** | `dist` |
+
+    **Required environment variable:**
+
+    ```env
+    # Point at the backend deployed in the previous step — no trailing slash
+    VITE_API_URL=https://your-backend.vercel.app/api
+    ```
+
+    <Warning>
+      Do not add a trailing slash to `VITE_API_URL`. The frontend constructs endpoint paths by direct concatenation (e.g. `${VITE_API_URL}/auth/login`), so a trailing slash will produce double-slash URLs.
+    </Warning>
+
+    Vercel builds the Vite app (`npm run build`) and serves the static output from `dist/`. The frontend is a PWA (`vite-plugin-pwa`) and will be installable on desktop and mobile browsers after deployment.
+  </Step>
+
+  <Step title="Wire the two projects together">
+    Now that both projects are live, connect them properly:
+
+    1. **Copy the frontend URL** (e.g. `https://eme2app.vercel.app`).
+    2. Open the **backend** Vercel project → **Settings → Environment Variables**.
+    3. Update `FRONTEND_URL` to the exact frontend URL — no trailing slash.
+    4. Click **Redeploy** on the backend to apply the updated CORS configuration.
+
+    The backend's CORS policy allows three origins:
+
+    | Origin | Purpose |
+    |---|---|
+    | Value of `FRONTEND_URL` | Your production frontend |
+    | `http://localhost:5173` | Local Vite dev server |
+    | `http://localhost:5174` | Local Vite alternate port |
+
+    Any frontend deployed at a custom domain that is not `FRONTEND_URL` will receive a CORS error until it is added as the `FRONTEND_URL` and the backend is redeployed.
+
+    <Tip>
+      If you run multiple frontend environments (e.g. a preview deployment on a different URL), you will need to update `FRONTEND_URL` and redeploy the backend whenever the preview URL changes, or use a stable custom domain for the frontend instead.
+    </Tip>
+  </Step>
+
+  <Step title="Configure branch-based deploy filters (recommended)">
+    By default Vercel triggers a deploy on every push to every branch. To prevent feature branches from creating unwanted deployments, configure an **Ignored Build Step** on both the backend and frontend projects.
+
+    **Vercel Dashboard → Settings → Git → Ignored Build Step → Custom**
+
+    Paste this script exactly (no `bash` prefix; semicolons after each `exit`):
+
+    ```bash
+    if [ "$VERCEL_GIT_COMMIT_REF" = "main" ] || [ "$VERCEL_GIT_COMMIT_REF" = "develop" ]; then exit 1; else exit 0; fi
+    ```
+
+    How the filter behaves:
+
+    | Branch | Result |
+    |---|---|
+    | `main` | Triggers a **production** deploy |
+    | `develop` | Triggers a **preview** deploy |
+    | Any other branch (`feature/*`, `fix/*`, etc.) | Deploy is **skipped automatically** |
+
+    <Note>
+      In Vercel's Ignored Build Step convention, `exit 1` means "proceed with the build" and `exit 0` means "skip the build". The script exits `1` (build) for `main` and `develop`, and exits `0` (skip) for everything else.
+    </Note>
+
+    Apply this configuration to **both** the backend and frontend Vercel projects.
+  </Step>
+
+</Steps>
+
+## Environment variable reference
+
+### Backend (Vercel)
+
+| Variable | Required | Description |
+|---|---|---|
+| `SUPABASE_POOLER_URL` | ✅ | Supabase Transaction Pooler URL (`postgresql://...`). Also accepted: `SUPABASE_DB_URL`, `DATABASE_URL`, `DB_URL`. |
+| `DB_SSL` | ✅ | Set to `true` for Supabase. |
+| `DB_SSL_REJECT_UNAUTHORIZED` | ✅ | Set to `true` for Supabase. |
+| `JWT_SECRET` | ✅ | Long random string used to sign and verify JWTs. |
+| `JWT_EXPIRE` | ✅ | Token expiry duration (e.g. `7d`, `24h`). |
+| `FRONTEND_URL` | ✅ | Full URL of the deployed frontend. Controls CORS. |
+| `NODE_ENV` | ✅ | Set to `production`. |
+
+### Frontend (Vercel)
+
+| Variable | Required | Description |
+|---|---|---|
+| `VITE_API_URL` | ✅ | Backend API base URL, no trailing slash (e.g. `https://your-backend.vercel.app/api`). |
+
+## Summary
+
+```
+Supabase (PostgreSQL)
+        │
+        ▼
+  Backend (Vercel)                 ◄──── FRONTEND_URL (CORS)
+  Root Dir: backend/
+  Entry: backend/api/index.js
+  Rewrites: backend/vercel.json
+  Health: GET /api/health
+  Version: GET /api/version
+        │
+        │  VITE_API_URL
+        ▼
+  Frontend (Vercel)
+  Root Dir: frontend/
+  Build: npm run build → dist/
+  PWA-enabled
+```

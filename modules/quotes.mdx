@@ -1,0 +1,250 @@
+---
+title: "Quotes and Budgets: Build and Convert to Invoices"
+sidebarTitle: "Quotes"
+description: "Create and manage client quotes in Eme2App. Accept a quote to automatically generate a draft invoice, or send it directly by email."
+---
+
+Quotes (presupuestos) let you propose prices to clients before any fiscal document is issued. In Eme2App, a quote follows its own lifecycle and can be converted into a draft invoice with a single API call, carrying over all line items, taxes, and client data automatically. This tight integration means you never need to re-enter data — the transition from quote to invoice is atomic and auditable.
+
+---
+
+## Quote Lifecycle
+
+```
+borrador ──► emitida ──► aceptada ──► (factura borrador created)
+                  └──► rechazada
+                  └──► caducada
+                  └──► convertida  (converted to albarán instead)
+```
+
+| Estado | Meaning |
+|---|---|
+| `borrador` | Draft — fully editable |
+| `emitida` | Sent to the client (status updated manually or via email send) |
+| `aceptada` | Client accepted; a draft invoice has been generated |
+| `rechazada` | Client declined |
+| `caducada` | Validity date passed without a response |
+| `convertida` | Converted to a delivery note (albarán) instead of an invoice |
+
+<Note>
+A quote in `cancelada`, `aceptada`, or `convertida` state cannot be accepted again. These states are terminal.
+</Note>
+
+---
+
+## Auto-Numbering
+
+Retrieve the next available quote number before creating:
+
+```http
+GET /api/presupuestos/proximo-numero
+```
+
+```json
+{ "proximo_numero": 18 }
+```
+
+The uniqueness constraint in the database is `(empresa_id, numero)`, so quote numbers are scoped per company and do not use series.
+
+---
+
+## Creating a Quote
+
+`POST /api/presupuestos`
+
+All presupuesto routes require a valid JWT. The `empresa_id` is injected from the authenticated session.
+
+**Required fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `cliente_id` | `string` | Must belong to the company |
+| `numero` | `integer` | Unique within the company |
+| `detalles` | `array` | At least one line |
+
+**Optional fields:** `fecha`, `notas`, `incluir_impuestos` (default `true`).
+
+**Detail line fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `articulo_id` | `string` | Required for non-comment lines |
+| `descripcion` | `string` | Free-text description |
+| `cantidad` | `number` | Quantity |
+| `precio_unitario` | `number` | Unit price |
+| `es_comentario` | `boolean` | Text-only line when `true` |
+| `linea_orden` | `integer` | Display order (auto-assigned if omitted) |
+
+When `incluir_impuestos` is `true` (the default), the backend resolves the VAT rate from `articulo.iva_id` and applies recargo de equivalencia for `REC`/`SIM` regime clients. The `irpf_monto` is also calculated from the client's `regimen_irpf`. All totals are stored server-side in `presupuestos.subtotal`, `iva_monto`, `irpf_monto`, and `total`.
+
+```json
+// POST /api/presupuestos — example request body
+{
+  "cliente_id": "abc123",
+  "numero": 18,
+  "fecha": "2025-06-15",
+  "incluir_impuestos": true,
+  "notas": "Válido hasta el 15 de julio de 2025",
+  "detalles": [
+    {
+      "articulo_id": "art-web-001",
+      "descripcion": "Diseño de landing page",
+      "cantidad": 1,
+      "precio_unitario": 800.00
+    },
+    {
+      "articulo_id": "art-seo-002",
+      "descripcion": "Optimización SEO (3 meses)",
+      "cantidad": 3,
+      "precio_unitario": 200.00
+    }
+  ]
+}
+```
+
+```json
+// 201 Created
+{ "id": "<presupuesto_uuid>", "mensaje": "Presupuesto creado exitosamente" }
+```
+
+---
+
+## Updating a Quote
+
+`PUT /api/presupuestos/:id`
+
+Only quotes in `borrador` state can be updated. The request body follows the same shape as the create call. All existing detail lines are replaced atomically — send the complete updated set of lines.
+
+```json
+// 200 OK
+{ "id": "<presupuesto_uuid>", "mensaje": "Presupuesto actualizado exitosamente" }
+```
+
+---
+
+## Updating Quote Status
+
+`PUT /api/presupuestos/:id/estado`
+
+Use this endpoint to manually advance the quote state (e.g. to mark it as sent, rejected, or expired):
+
+```json
+{ "estado": "emitida" }
+```
+
+<Warning>
+The valid states accepted by this endpoint are `borrador`, `emitida`, `pagada`, and `cancelada`. The `aceptada` and `convertida` states are set automatically by the accept/convert flows and cannot be set manually.
+</Warning>
+
+---
+
+## Sending a Quote by Email
+
+`POST /api/presupuestos/:id/enviar-email`
+
+The frontend generates the PDF and sends it as Base64:
+
+```json
+{
+  "destino": "cliente@empresa.es",
+  "pdf_base64": "<base64-string>",
+  "pdf_nombre": "presupuesto-18.pdf",
+  "asunto": "Presupuesto nº 18",
+  "texto": "Hola, te adjuntamos el presupuesto. Un saludo."
+}
+```
+
+The backend uses the company's configured SMTP settings. Unlike invoices, quotes have no separate `estado_emision` field — if you want to track that the quote was sent, update the status to `emitida` manually after the email call.
+
+---
+
+## Accepting a Quote → Draft Invoice
+
+`POST /api/presupuestos/:id/aceptar`
+
+This is the key conversion endpoint. When accepted, Eme2App:
+
+1. Validates the quote is not in `cancelada`, `aceptada`, or `convertida` state.
+2. Resolves the invoice number, series, date, and payment method from the request body.
+3. Creates a new `facturas` row in `borrador` state, linked via `presupuesto_origen_id`.
+4. Copies all non-comment detail lines from the quote, recalculating taxes for the invoice context (including recargo de equivalencia if the client's regime requires it).
+5. Marks the presupuesto as `aceptada`.
+
+**Required in body:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `numero` | `integer` | Target invoice number — must not already exist |
+| `fecha` | `string` | Invoice date (`YYYY-MM-DD`) |
+
+**Optional in body:** `serie_id`, `serie`, `forma_pago_id` (falls back to `cliente.forma_pago_defecto_id`).
+
+```json
+// POST /api/presupuestos/:id/aceptar
+{
+  "numero": 42,
+  "fecha": "2025-06-20",
+  "serie": "A",
+  "forma_pago_id": "uuid-forma-pago"
+}
+```
+
+```json
+// 201 Created
+{
+  "id": "<factura_uuid>",
+  "numero": 42,
+  "fecha": "2025-06-20",
+  "mensaje": "Presupuesto aceptado. Factura borrador creada."
+}
+```
+
+<Tip>
+Call `GET /api/facturas/proximo-numero?serie=A` first to get the next available invoice number to pass in the accept body.
+</Tip>
+
+---
+
+## Deleting a Quote
+
+`DELETE /api/presupuestos/:id`
+
+Only quotes in `borrador` state can be deleted.
+
+---
+
+## Typical Workflow
+
+<Steps>
+  <Step title="Get the next number">
+    Call `GET /api/presupuestos/proximo-numero` to retrieve the auto-incremented number.
+  </Step>
+  <Step title="Create the quote">
+    Call `POST /api/presupuestos` with the client, number, date, optional notes, and all detail lines.
+  </Step>
+  <Step title="Send to the client">
+    Generate the PDF in the frontend and call `POST /api/presupuestos/:id/enviar-email`. Update state to `emitida` with `PUT /api/presupuestos/:id/estado`.
+  </Step>
+  <Step title="Client accepts">
+    Call `POST /api/presupuestos/:id/aceptar` with a valid invoice number, date, and series. A draft invoice is created automatically.
+  </Step>
+  <Step title="Continue with the invoice">
+    The new draft invoice is ready to be confirmed and collected via the Invoices module.
+  </Step>
+</Steps>
+
+---
+
+## API Quick Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/presupuestos/proximo-numero` | Next available quote number |
+| `GET` | `/api/presupuestos` | Paginated list of quotes |
+| `GET` | `/api/presupuestos/:id` | Quote detail |
+| `POST` | `/api/presupuestos` | Create a quote |
+| `PUT` | `/api/presupuestos/:id` | Update a quote (borrador only) |
+| `PUT` | `/api/presupuestos/:id/estado` | Update quote status |
+| `POST` | `/api/presupuestos/:id/aceptar` | Accept quote → create draft invoice |
+| `POST` | `/api/presupuestos/:id/enviar-email` | Send PDF by email |
+| `DELETE` | `/api/presupuestos/:id` | Delete a quote (borrador only) |

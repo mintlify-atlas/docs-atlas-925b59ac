@@ -1,47 +1,240 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get started with Eme2App locally in minutes"
+sidebarTitle: "Quickstart"
+description: "Learn how to install, configure, and run Eme2App locally with PostgreSQL in under 10 minutes using the provided start scripts."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+Getting Eme2App running on your local machine takes less than ten minutes. The repo ships with a React + Vite frontend and a Node.js + Express backend that you configure independently via environment files, then start either in separate terminals or with the convenience scripts at the repo root. All you need is Node.js and a reachable PostgreSQL database — local or a free Supabase project both work out of the box.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Verify prerequisites">
+    Before you begin, make sure the following are available in your environment:
+
+    | Requirement | Minimum version |
+    |---|---|
+    | **Node.js** | `>= 20.19.0` |
+    | **npm** | bundled with Node.js |
+    | **PostgreSQL** | Local instance **or** a [Supabase](https://supabase.com) project |
+
+    Check your Node.js version:
 
     ```bash
-    npm install your-package
+    node --version
     ```
+
+    <Note>
+      Eme2App uses native ES Modules (`"type": "module"`) in both the frontend and backend. Versions of Node.js below 20.19.0 are not supported.
+    </Note>
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Clone the repo and install dependencies">
+    Clone the repository and install dependencies for both sub-projects. The backend's `postinstall` hook runs `prisma generate` automatically after `npm install`.
 
     ```bash
-    your-cli init
+    git clone https://github.com/eme2dev/Eme2App.git
+    cd Eme2App
     ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+    Install frontend dependencies:
 
     ```bash
-    your-cli start
+    cd frontend && npm install
+    ```
+
+    Install backend dependencies (Prisma Client is generated automatically):
+
+    ```bash
+    cd ../backend && npm install
     ```
   </Step>
+
+  <Step title="Configure the frontend environment">
+    Create `frontend/.env.local` and set the backend API base URL:
+
+    ```env
+    VITE_API_URL=http://localhost:3001/api
+    ```
+
+    <Note>
+      Do not add a trailing slash. The frontend appends route paths directly to this value (e.g. `${VITE_API_URL}/auth/login`).
+    </Note>
+  </Step>
+
+  <Step title="Configure the backend environment">
+    Create `backend/.env`. The backend resolves your database connection using a strict priority order — set **one** of the URL variables or fall back to individual host/port variables.
+
+    ```env
+    # ── Database connection (pick ONE URL approach or use individual vars) ──────
+
+    # Priority 1 — Supabase Transaction Pooler (recommended for Supabase projects)
+    SUPABASE_POOLER_URL=postgresql://postgres:password@aws-0-region.pooler.supabase.com:6543/postgres?sslmode=require
+
+    # Priority 2 — Supabase Direct URL
+    # SUPABASE_DB_URL=postgresql://postgres:password@db.xxxx.supabase.co:5432/postgres
+
+    # Priority 3 — Generic connection URL
+    # DATABASE_URL=postgresql://user:password@localhost:5432/eme2app
+
+    # Priority 4 — Alias
+    # DB_URL=postgresql://user:password@localhost:5432/eme2app
+
+    # Fallback — individual host/port vars (used when no URL is defined above)
+    DB_HOST=localhost
+    DB_PORT=5432
+    DB_NAME=postgres
+    DB_USER=postgres
+    DB_PASSWORD=
+
+    # ── SSL ───────────────────────────────────────────────────────────────────────
+    DB_SSL=true
+    DB_SSL_REJECT_UNAUTHORIZED=true
+    # DB_SSL_CA_FILE=./certs/ca.pem
+    # DB_SSL_CA="-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+
+    # ── Server ────────────────────────────────────────────────────────────────────
+    PORT=3001
+    FRONTEND_URL=http://localhost:5173
+
+    # ── Auth ──────────────────────────────────────────────────────────────────────
+    JWT_SECRET=change_me_to_a_long_random_secret
+    JWT_EXPIRE=7d
+    ```
+
+    **Database URL priority order** (highest to lowest):
+
+    1. `SUPABASE_POOLER_URL`
+    2. `SUPABASE_DB_URL`
+    3. `DATABASE_URL`
+    4. `DB_URL`
+    5. Individual `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` vars
+
+    <Warning>
+      The backend only accepts `postgres://` or `postgresql://` connection strings. Any other protocol raises a startup error. If your password contains special characters, encode it with `encodeURIComponent`.
+    </Warning>
+
+    <Note>
+      Setting `DB_SSL_REJECT_UNAUTHORIZED=false` is useful for self-signed certificates in local development. In that case the backend automatically adjusts `sslmode=no-verify` in the resolved connection URL.
+    </Note>
+  </Step>
+
+  <Step title="Start the backend">
+    Open a terminal in the `backend/` directory and start the development server. Nodemon watches for file changes and restarts automatically.
+
+    ```bash
+    cd backend
+    npm run dev
+    ```
+
+    On startup the backend:
+    1. Connects to PostgreSQL using the priority-resolved connection config
+    2. **Auto-bootstraps the PostgreSQL schema** — all tables and indexes are created if they do not exist
+    3. Runs a version check via `verificarVersion()`
+    4. Begins listening on `http://localhost:3001`
+
+    You should see output similar to:
+
+    ```
+    ✅ Conectado a base de datos PostgreSQL/Supabase
+    🚀 Backend ejecutándose en http://localhost:3001
+    📊 Ambiente: development
+    🧩 Motor BD: supabase-postgres
+    🔌 Base de datos: localhost:5432/postgres
+    ```
+
+    Verify the backend is healthy:
+
+    ```bash
+    curl http://localhost:3001/api/health
+    ```
+
+    Expected response:
+
+    ```json
+    {
+      "estado": "ok",
+      "mensaje": "Backend funcionando correctamente",
+      "hora": "2025-01-01T12:00:00.000Z"
+    }
+    ```
+  </Step>
+
+  <Step title="Start the frontend">
+    Open a second terminal in the `frontend/` directory and start Vite's development server:
+
+    ```bash
+    cd frontend
+    npm run dev
+    ```
+
+    Vite starts at `http://localhost:5173` with Hot Module Replacement enabled.
+  </Step>
+
+  <Step title="Or use the convenience scripts (optional)">
+    Instead of managing two terminals manually, use the cross-platform scripts at the repo root to start both servers simultaneously:
+
+    <CodeGroup>
+      ```powershell PowerShell
+      ./start-dev.ps1
+      ```
+
+      ```batch Command Prompt
+      start-dev.bat
+      ```
+
+      ```batch CMD (alias)
+      start-dev.cmd
+      ```
+    </CodeGroup>
+
+    To stop both servers:
+
+    <CodeGroup>
+      ```powershell PowerShell
+      ./stop-dev.ps1
+      ```
+
+      ```batch Command Prompt
+      stop-dev.bat
+      ```
+
+      ```batch CMD (alias)
+      stop-dev.cmd
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Open the app">
+    Navigate to [http://localhost:5173](http://localhost:5173) in your browser. You will be greeted by the Eme2App login screen.
+
+    <Tip>
+      The backend also exposes `GET /api/version` for client-side version compatibility checks. The frontend calls this endpoint automatically on startup to verify it is talking to a compatible API version.
+    </Tip>
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Useful backend scripts
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Beyond `npm run dev`, the backend `package.json` ships several utility scripts:
+
+| Script | Description |
+|---|---|
+| `npm run start` | Start the server without Nodemon (production-style) |
+| `npm run test` | Run backend tests with Vitest |
+| `npm run db:local:init` | Quick-init a local PostgreSQL database via `scripts/setupLocalDb.js` |
+| `npm run prisma:pull` | Introspect the live schema into `prisma/schema.prisma` |
+| `npm run prisma:generate` | Regenerate the Prisma Client from the schema |
+| `npm run prisma:smoke` | Run the Prisma smoke test |
+| `npm run prisma:validate` | Validate the Prisma schema without generating |
+| `npm run prisma:studio` | Open Prisma Studio for visual data browsing |
+
+## CORS behaviour
+
+The backend allows cross-origin requests from these origins by default:
+
+- `FRONTEND_URL` (value from `backend/.env`)
+- `http://localhost:5173`
+- `http://localhost:5174`
+
+Any other origin — including a deployed frontend on a custom domain — must be set as `FRONTEND_URL` in the backend environment and the server restarted (or redeployed on Vercel).

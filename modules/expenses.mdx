@@ -1,0 +1,238 @@
+---
+title: "Expense Tracking and Purchase Invoices"
+sidebarTitle: "Expenses"
+description: "Record and manage business expenses and purchase invoices in Eme2App, with supplier assignment, VAT breakdown, and report integration."
+---
+
+The expenses module covers the inbound side of your company's finances — everything you pay out, from supplier invoices to operational costs. Each expense record stores a supplier reference, date, one or more concept lines with their base amounts and VAT breakdown, and an optional link to a registered `proveedores` entry. Because expenses feed directly into Eme2App's VAT summary and reporting engine, keeping them accurate is essential for quarterly tax filings.
+
+---
+
+## What Expenses Cover
+
+Eme2App uses the term "gastos" to encompass both formal **facturas de compra** (purchase invoices from suppliers) and general **gastos operativos** (operating costs such as utilities, subscriptions, or professional fees). Both types share the same data model and API.
+
+<Note>
+The same router is mounted at two paths: `/api/gastos` and `/api/facturas-compra`. Both are fully interchangeable — use whichever is more semantically appropriate in your frontend code.
+</Note>
+
+---
+
+## Data Model
+
+A `gastos` record contains header-level fields plus one or more `detalles_gastos` lines:
+
+**Header fields (`gastos` table):**
+
+| Field | Type | Notes |
+|---|---|---|
+| `fecha` | `date` | Expense date (`YYYY-MM-DD`) — required |
+| `proveedor_id` | `string` (UUID) | Optional link to a registered supplier |
+| `proveedor` | `string` | Free-text supplier name (required if no `proveedor_id`) |
+| `referencia_proveedor` | `string` | Supplier's document reference — max 20 chars, required |
+| `estado` | `boolean` | Active/inactive flag |
+| `base_imponible` | `Decimal(10,2)` | Aggregate taxable base (header-level summary) |
+| `cuota_iva` | `Decimal(10,2)` | Aggregate VAT amount |
+| `total` | `Decimal(10,2)` | Total including VAT |
+
+**Detail line fields (`detalles_gastos`):**
+
+| Field | Type | Notes |
+|---|---|---|
+| `concepto` | `string` | Line description — required |
+| `base_imponible` | `number` | Taxable base for this line — must be > 0 |
+| `iva_id` | `string` | Optional link to an `iva` record |
+| `cuota_iva` | `number` | Computed or entered VAT amount |
+| `total` | `number` | Base + cuota_iva |
+| `modo_calculo` | `string` | `"base"` / `"total"` / `"persistido"` — controls how totals are derived |
+| `linea_orden` | `integer` | Display order |
+
+---
+
+## Creating an Expense
+
+`POST /api/gastos`
+
+The backend accepts two input shapes:
+
+**Multi-line (using `detalles` array):**
+
+```json
+{
+  "fecha": "2025-06-15",
+  "proveedor_id": "prov-uuid-123",
+  "referencia_proveedor": "FAC-2025-0042",
+  "estado": true,
+  "detalles": [
+    {
+      "concepto": "Hosting mensual",
+      "base_imponible": 120.00,
+      "iva_id": "iva-21-uuid",
+      "cuota_iva": 25.20,
+      "total": 145.20,
+      "linea_orden": 1
+    },
+    {
+      "concepto": "Dominio anual",
+      "base_imponible": 15.00,
+      "iva_id": "iva-21-uuid",
+      "cuota_iva": 3.15,
+      "total": 18.15,
+      "linea_orden": 2
+    }
+  ]
+}
+```
+
+**Single-line (legacy flat body):**
+
+```json
+{
+  "fecha": "2025-06-15",
+  "proveedor": "Telefónica S.A.",
+  "referencia_proveedor": "20250615-TEL",
+  "concepto": "Factura telefonía junio",
+  "base_imponible": 85.00,
+  "iva_id": "iva-21-uuid"
+}
+```
+
+When using the flat body, the backend wraps the single line into a `detalles` array automatically.
+
+**Validation rules enforced server-side:**
+
+- `fecha` must be in `YYYY-MM-DD` format.
+- Either `proveedor_id` or `proveedor` (free text) must be present.
+- `referencia_proveedor` is required and may not exceed 20 characters.
+- Every detail line must have a non-empty `concepto`.
+- Every detail line must have a `base_imponible` greater than 0.
+
+```json
+// 201 Created
+{
+  "estado": "ok",
+  "mensaje": "Gasto creado correctamente",
+  "datos": { "id": "<gasto_uuid>", ... }
+}
+```
+
+---
+
+## Listing Expenses
+
+`GET /api/gastos`
+
+Returns a paginated list of expenses for the authenticated company. Query parameters:
+
+| Parameter | Description |
+|---|---|
+| `page` | Page number (default: 1) |
+| `pageSize` | Results per page (defaults to `empresa.pagesize_default`) |
+
+```json
+// 200 OK
+{
+  "estado": "ok",
+  "datos": [ ... ],
+  "paginacion": { "page": 1, "pageSize": 25, "total": 140 }
+}
+```
+
+---
+
+## Retrieving a Single Expense
+
+`GET /api/gastos/:id`
+
+Returns the expense header and all its `detalles_gastos` lines.
+
+```json
+// 200 OK
+{
+  "estado": "ok",
+  "datos": {
+    "id": "<gasto_uuid>",
+    "fecha": "2025-06-15",
+    "proveedor": "Telefónica S.A.",
+    "referencia_proveedor": "20250615-TEL",
+    "base_imponible": 85.00,
+    "cuota_iva": 17.85,
+    "total": 102.85,
+    "detalles": [ ... ]
+  }
+}
+```
+
+---
+
+## Updating an Expense
+
+`PUT /api/gastos/:id`
+
+The request body follows the same shape as the create call. All existing detail lines are replaced. The same validation rules apply.
+
+```json
+// 200 OK
+{
+  "estado": "ok",
+  "mensaje": "Gasto actualizado correctamente",
+  "datos": { ... }
+}
+```
+
+---
+
+## Deleting an Expense
+
+`DELETE /api/gastos/:id`
+
+Permanently deletes the expense and all its detail lines (cascade). There are no state restrictions — any expense can be deleted.
+
+```json
+// 200 OK
+{ "estado": "ok", "mensaje": "Gasto eliminado correctamente" }
+```
+
+---
+
+## VAT Breakdown and Reports Integration
+
+Every `detalles_gastos` line is linked to an `iva` record via `iva_id`. This enables the reporting engine to:
+
+- Aggregate `base_imponible` and `cuota_iva` by VAT rate across all expenses in a period.
+- Include purchase-side VAT in the quarterly **Modelo 303** summary (IVA soportado).
+- Cross-reference against income invoices for the net VAT position.
+
+<Accordion title="Expense IVA calculation modes">
+The `modo_calculo` field in each `detalles_gastos` line controls how the backend derives amounts when saving:
+
+| Mode | Behaviour |
+|---|---|
+| `"base"` | `cuota_iva = base_imponible × iva.porcentaje / 100`; `total = base + cuota_iva` |
+| `"total"` | Back-calculates `base_imponible` from a known total including VAT |
+| `"persistido"` | Stores the values exactly as supplied; no recalculation |
+
+Use `"persistido"` when importing historical invoices where the exact amounts are known and must not be altered.
+</Accordion>
+
+---
+
+## Roles and Access
+
+All expense endpoints require a valid JWT via the `verificarAutenticacion` middleware. The `empresaId` is resolved from the authenticated session — users only see expenses belonging to their own company.
+
+<Note>
+Unlike invoices (where only admins can delete), expense deletion is available to all authenticated users. If you need to restrict deletions to admin roles, configure the appropriate permission in `menu_items_permisos`.
+</Note>
+
+---
+
+## API Quick Reference
+
+| Method | Endpoint | Also available at | Description |
+|---|---|---|---|
+| `GET` | `/api/gastos` | `/api/facturas-compra` | Paginated expense list |
+| `GET` | `/api/gastos/:id` | `/api/facturas-compra/:id` | Single expense detail |
+| `POST` | `/api/gastos` | `/api/facturas-compra` | Create an expense |
+| `PUT` | `/api/gastos/:id` | `/api/facturas-compra/:id` | Update an expense |
+| `DELETE` | `/api/gastos/:id` | `/api/facturas-compra/:id` | Delete an expense |

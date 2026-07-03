@@ -1,0 +1,247 @@
+---
+title: "SMTP Email Integration: Send Documents from Eme2App"
+sidebarTitle: "Email / SMTP"
+description: "Configure SMTP in Eme2App to send invoices, quotes, and delivery notes by email directly from the app using Gmail, Outlook, Brevo, or a custom mail server."
+---
+
+Eme2App can send invoices, quotes, and delivery notes (albaranes) directly by email from the document detail view, attaching the generated PDF automatically. Email delivery is powered by **Nodemailer** and uses SMTP credentials stored in your company profile. Four providers are supported out of the box — Gmail, Outlook, Brevo (formerly Sendinblue), and any generic custom SMTP server — and the configuration can be tested without leaving the settings screen. Every document send route reuses the same SMTP transport as the test endpoint, so confirming your credentials work in the test step guarantees they will work for real document sends.
+
+## How it works
+
+```
+User clicks "Send by email"
+        │
+        ▼
+POST /api/facturas/:id/enviar-email   (or presupuestos, albaranes)
+        │
+        ▼
+ Eme2App reads empresa.smtp_* fields
+        │
+        ▼
+ Nodemailer opens SMTP connection
+        │
+        ▼
+ PDF attached → email delivered
+```
+
+SMTP credentials are stored per-company in the `empresa` record. When an email is sent from a document endpoint, Eme2App fetches the active empresa's SMTP configuration automatically from the JWT context — no extra parameters are needed in the document send request.
+
+---
+
+## Authentication and roles
+
+SMTP configuration is part of the company profile and requires:
+
+- A valid **JWT bearer token** in the `Authorization` header.
+- Role **`admin`** — only admins can read or write SMTP settings and trigger the test endpoint.
+- Document send endpoints (`/api/facturas/:id/enviar-email`, etc.) require role **`admin`** or **`user`** with an active empresa.
+
+---
+
+## Configuring SMTP
+
+SMTP fields are set via `PUT /api/empresa` (full company profile update). The relevant fields are:
+
+| Field           | Type    | Description                                                                 |
+|-----------------|---------|-----------------------------------------------------------------------------|
+| `smtp_provider` | string  | One of `gmail`, `outlook`, `brevo`, `custom`                                |
+| `smtp_host`     | string  | SMTP server hostname. Required for `brevo` and `custom`; ignored for `gmail`/`outlook` (Nodemailer resolves these by service name). |
+| `smtp_port`     | integer | SMTP port (1–65535). Defaults to `587` if not specified.                    |
+| `smtp_secure`   | boolean | `true` for implicit TLS (port 465). `false` uses STARTTLS. Port 465 always forces `true`. |
+| `smtp_user`     | string  | SMTP username / login email address.                                        |
+| `smtp_pass`     | string  | SMTP password or App Password.                                              |
+| `email_from`    | string  | Sender display name or `From` address. Accepts a plain name (`"Mi Empresa"`) or a full RFC 822 address (`"Mi Empresa <facturas@miempresa.com>"`). Falls back to `smtp_user` if empty. |
+
+### Example request
+
+```bash
+curl -X PUT https://your-eme2app.com/api/empresa \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "smtp_provider": "brevo",
+    "smtp_host": "smtp-relay.brevo.com",
+    "smtp_port": 587,
+    "smtp_secure": false,
+    "smtp_user": "your@email.com",
+    "smtp_pass": "your_brevo_smtp_key",
+    "email_from": "Facturas Mi Empresa <facturas@miempresa.com>"
+  }'
+```
+
+---
+
+## Provider configuration
+
+<Tabs>
+  <Tab title="Gmail">
+    Gmail requires an **App Password** — a 16-character code generated in your Google Account security settings. Using your regular Google account password will fail because Google blocks third-party SMTP logins from accounts with 2-Step Verification enabled.
+
+    <Warning>
+      2-Step Verification (2FA) must be **enabled** on your Google account before you can generate an App Password. If 2FA is off, the App Password option is not available. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) to create one.
+    </Warning>
+
+    ```json
+    {
+      "smtp_provider": "gmail",
+      "smtp_user": "tu-cuenta@gmail.com",
+      "smtp_pass": "abcd efgh ijkl mnop",
+      "smtp_secure": false,
+      "email_from": "Tu Empresa <tu-cuenta@gmail.com>"
+    }
+    ```
+
+    When `smtp_provider` is `gmail`, Eme2App passes the value directly to Nodemailer's `service: 'gmail'` option, which configures `smtp.gmail.com:587` with STARTTLS automatically — you do not need to set `smtp_host` or `smtp_port`.
+  </Tab>
+  <Tab title="Outlook / Microsoft 365">
+    Works with personal Outlook accounts and Microsoft 365 business accounts. Use your full Microsoft email address as `smtp_user`.
+
+    ```json
+    {
+      "smtp_provider": "outlook",
+      "smtp_user": "tu-cuenta@outlook.com",
+      "smtp_pass": "tu_contraseña",
+      "smtp_secure": false,
+      "email_from": "Tu Empresa <tu-cuenta@outlook.com>"
+    }
+    ```
+
+    Nodemailer resolves `smtp-mail.outlook.com:587` (STARTTLS) automatically when `smtp_provider` is `outlook`. As with Gmail, `smtp_host` and `smtp_port` are ignored.
+  </Tab>
+  <Tab title="Brevo (Sendinblue)">
+    Brevo is a transactional email platform with a generous free tier. Use the SMTP credentials from your Brevo account dashboard (not your login password).
+
+    <Tip>
+      Brevo's free plan allows **300 emails per day** at no cost, which is more than sufficient for most small Spanish businesses sending invoices. Paid plans remove the daily cap. Sign up at [brevo.com](https://www.brevo.com).
+    </Tip>
+
+    ```json
+    {
+      "smtp_provider": "brevo",
+      "smtp_host": "smtp-relay.brevo.com",
+      "smtp_port": 587,
+      "smtp_secure": false,
+      "smtp_user": "your-brevo-login@email.com",
+      "smtp_pass": "your_brevo_smtp_key",
+      "email_from": "Facturas Mi Empresa <noreply@miempresa.com>"
+    }
+    ```
+
+    Eme2App also recognizes Brevo's alternative port **2525**, which bypasses restrictions on hosting providers that block the standard ports 25, 465, and 587 on free-tier plans.
+  </Tab>
+  <Tab title="Custom SMTP">
+    Use any SMTP server by providing the full host and port. This covers private mail servers, Postfix setups, or other third-party providers like Mailgun, Mailjet, or Amazon SES SMTP.
+
+    ```json
+    {
+      "smtp_provider": "custom",
+      "smtp_host": "mail.miempresa.com",
+      "smtp_port": 587,
+      "smtp_secure": false,
+      "smtp_user": "facturas@miempresa.com",
+      "smtp_pass": "password_del_servidor",
+      "email_from": "Facturas Mi Empresa <facturas@miempresa.com>"
+    }
+    ```
+
+    For implicit TLS (port 465), set `"smtp_secure": true`. For STARTTLS (port 587), set `"smtp_secure": false`.
+  </Tab>
+</Tabs>
+
+---
+
+## Testing the configuration
+
+Before saving final credentials, test the connection and delivery with `POST /api/empresa/probar-email`. This endpoint creates a transient Nodemailer transport from the fields you pass in the request body — it does **not** require the settings to be saved in the empresa record first, making it safe to test before committing.
+
+**Required role:** `admin`
+
+### Request body
+
+| Field           | Type    | Required | Description                                        |
+|-----------------|---------|----------|----------------------------------------------------|
+| `destino`       | string  | ✅ Yes   | Recipient email address for the test message.      |
+| `smtp_provider` | string  | No       | Provider to test (`gmail`, `outlook`, `brevo`, `custom`). |
+| `smtp_host`     | string  | No       | SMTP host (required for `brevo`/`custom`).         |
+| `smtp_port`     | integer | No       | SMTP port.                                         |
+| `smtp_secure`   | boolean | No       | TLS mode.                                          |
+| `smtp_user`     | string  | No       | SMTP username.                                     |
+| `smtp_pass`     | string  | No       | SMTP password or App Password.                     |
+| `email_from`    | string  | No       | Sender address for the test message.               |
+
+### Example
+
+```bash
+curl -X POST https://your-eme2app.com/api/empresa/probar-email \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "destino": "test@example.com",
+    "smtp_provider": "brevo",
+    "smtp_host": "smtp-relay.brevo.com",
+    "smtp_port": 587,
+    "smtp_secure": false,
+    "smtp_user": "your@email.com",
+    "smtp_pass": "your_brevo_smtp_key",
+    "email_from": "Eme2App Test <your@email.com>"
+  }'
+```
+
+### Success response
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Email de prueba enviado correctamente"
+}
+```
+
+### Error response
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Autenticacion SMTP fallida. Si usas Gmail, configura una App Password en lugar de la contraseña normal de la cuenta."
+}
+```
+
+---
+
+## Sending documents by email
+
+Once SMTP is configured in the empresa profile, documents can be sent by email from their respective API endpoints. Each endpoint generates the PDF on the server, attaches it to the email, and delivers it using the empresa's saved SMTP settings.
+
+<CardGroup cols={3}>
+  <Card title="Invoice" icon="file-invoice">
+    `POST /api/facturas/:id/enviar-email`
+  </Card>
+  <Card title="Quote" icon="file-contract">
+    `POST /api/presupuestos/:id/enviar-email`
+  </Card>
+  <Card title="Delivery note" icon="truck">
+    `POST /api/albaranes/:id/enviar-email`
+  </Card>
+</CardGroup>
+
+All three endpoints share the same auth requirements: **JWT** + active empresa + role **`admin`** or **`user`**.
+
+The `:id` parameter is the UUID of the document in the database. Eme2App fetches the document, generates the PDF, looks up the recipient email from the associated cliente record, and sends the message using the empresa's SMTP configuration — no additional body parameters are required.
+
+### Invoice email example
+
+```bash
+curl -X POST https://your-eme2app.com/api/facturas/a1b2c3d4-e5f6-7890-abcd-ef1234567890/enviar-email \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## SMTP error reference
+
+| Error message pattern | Cause and fix |
+|---|---|
+| `Autenticacion SMTP fallida... App Password` | Wrong password. For Gmail, use an App Password, not the account password. |
+| `Falta usuario o contraseña SMTP` | `smtp_user` or `smtp_pass` is empty in the empresa profile. |
+| `Falta SMTP_HOST en la configuración` | `smtp_host` is required for `brevo` and `custom` providers. |
+| `No se pudo conectar al servidor SMTP... puertos 25, 465 y 587` | Hosting provider blocks outbound SMTP ports. Use Brevo on port 2525 or upgrade hosting plan. |
+| `Error SMTP: <server response>` | The SMTP server returned an error. The full server response is included in the message. |

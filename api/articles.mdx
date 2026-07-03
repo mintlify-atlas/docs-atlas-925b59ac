@@ -1,0 +1,393 @@
+---
+title: "Articles API: Product and Service Catalog"
+sidebarTitle: "Articles"
+description: "REST API reference for Eme2App articles. Manage your product and service catalog with codes, prices, VAT rates, and per-company uniqueness constraints."
+---
+
+The Articles API manages the reusable product and service catalog for each company. An article (`articulo`) stores a short `codigo`, a full `descripcion`, a unit `precio`, and a linked VAT rate (`iva_id`). Articles are referenced by invoice lines (`detalles_facturas`) and budget lines (`detalles_presupuestos`), so once an article is used in a document it **cannot be hard-deleted** — the API returns a `400` with a clear message instead of silently failing. Codes are unique per company (the `ux_articulos_empresa_codigo` constraint), making it safe to use them as human-readable identifiers in CSV imports or ERP integrations. Articles also support a **bundles** feature through associated articles (`/:id/asociados`), allowing a parent article to automatically expand into multiple child articles on a document line.
+
+## Authentication
+
+All endpoints require a valid JWT in the `Authorization` header. The token must belong to an active user with role `admin` or `user` linked to an active `empresa`.
+
+```
+Authorization: Bearer <token>
+```
+
+---
+
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/articulos` | List all active articles |
+| `GET` | `/api/articulos/:id` | Get a single article by ID |
+| `POST` | `/api/articulos` | Create a new article |
+| `PUT` | `/api/articulos/:id` | Update an existing article |
+| `PATCH` | `/api/articulos/:id/toggle-estado` | Toggle active / inactive status |
+| `DELETE` | `/api/articulos/:id` | Hard-delete an article (blocked if referenced) |
+| `GET` | `/api/articulos/:id/asociados` | List associated (bundle) articles |
+| `POST` | `/api/articulos/:id/asociados` | Add an associated article |
+| `DELETE` | `/api/articulos/:id/asociados/:asociadoId` | Remove an associated article |
+
+---
+
+## GET /api/articulos
+
+Returns all articles with `estado = true` for the authenticated company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/articulos \
+  -H "Authorization: Bearer <token>"
+```
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "b2c3d4e5-...",
+      "codigo": "SRV-001",
+      "descripcion": "Consultoría técnica por hora",
+      "precio": "95.00",
+      "iva_id": "uuid-iva-general",
+      "estado": true,
+      "empresa_id": "uuid-empresa",
+      "created_at": "2024-02-01T09:00:00.000Z",
+      "updated_at": "2024-02-01T09:00:00.000Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+<ResponseField name="estado" type="string">
+  Always `"exito"` on success.
+</ResponseField>
+
+<ResponseField name="datos" type="array">
+  Array of active article objects.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Count of records returned.
+</ResponseField>
+
+---
+
+## GET /api/articulos/:id
+
+Returns a single article. Returns `404` if the article does not exist or belongs to a different company.
+
+```bash
+curl -X GET https://api.eme2app.es/api/articulos/b2c3d4e5-... \
+  -H "Authorization: Bearer <token>"
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the article.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": { "id": "b2c3d4e5-...", "codigo": "SRV-001", "descripcion": "Consultoría técnica por hora", ... }
+}
+```
+
+### Response `404`
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Artículo no encontrado"
+}
+```
+
+---
+
+## POST /api/articulos
+
+Creates a new article in the company's catalog.
+
+```bash
+curl -X POST https://api.eme2app.es/api/articulos \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "codigo": "SRV-001",
+    "descripcion": "Consultoría técnica por hora",
+    "precio": 95.00,
+    "iva_id": "uuid-iva-general",
+    "estado": true
+  }'
+```
+
+### Body parameters
+
+<ParamField body="codigo" type="string" required>
+  Short alphanumeric code for the article. Must be unique within the company — the pair `(empresa_id, codigo)` is enforced by a database unique index (`ux_articulos_empresa_codigo`). Attempting to create a second article with the same code in the same company returns a `400` error.
+</ParamField>
+
+<ParamField body="descripcion" type="string" required>
+  Full description of the product or service. Max 500 characters. Appears on invoice and budget lines.
+</ParamField>
+
+<ParamField body="precio" type="number" required>
+  Unit price. Must be a valid number (integer or decimal). Stored as `DECIMAL(10,2)`.
+</ParamField>
+
+<ParamField body="iva_id" type="string" required>
+  UUID of an `iva` record belonging to the authenticated company. Defines the VAT percentage applied when this article is added to a document line.
+</ParamField>
+
+<ParamField body="estado" type="boolean">
+  Initial active status. Defaults to `true` when omitted.
+</ParamField>
+
+<Warning>
+  The `(empresa_id, codigo)` pair is a hard database unique constraint. If you attempt to create two articles with the same `codigo` in the same company, the operation will return a `400` error. Use `GET /api/articulos` first to verify code availability, or use a systematic naming convention such as a category prefix and sequential number.
+</Warning>
+
+### Response `201`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Artículo creado exitosamente",
+  "datos": {
+    "id": "b2c3d4e5-...",
+    "codigo": "SRV-001",
+    "descripcion": "Consultoría técnica por hora",
+    "precio": "95.00",
+    "iva_id": "uuid-iva-general",
+    "estado": true,
+    "empresa_id": "uuid-empresa",
+    "created_at": "2024-02-01T09:00:00.000Z"
+  }
+}
+```
+
+### Response `400` — duplicate code
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Error al crear artículo: ..."
+}
+```
+
+### Response `400` — validation failure
+
+```json
+{
+  "estado": "error",
+  "mensaje": "El código es requerido"
+}
+```
+
+---
+
+## PUT /api/articulos/:id
+
+Full update of an existing article. Accepts the same body fields as `POST`. Returns `404` if the article is not found within the company scope.
+
+```bash
+curl -X PUT https://api.eme2app.es/api/articulos/b2c3d4e5-... \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "codigo": "SRV-001",
+    "descripcion": "Consultoría técnica por hora — tarifa 2025",
+    "precio": 105.00,
+    "iva_id": "uuid-iva-general"
+  }'
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the article to update.
+</ParamField>
+
+The body accepts the same fields as `POST /api/articulos`. Changing `codigo` to a value already used by another article in the same company will return a `400` error.
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Artículo actualizado exitosamente",
+  "datos": { "id": "b2c3d4e5-...", "precio": "105.00", ... }
+}
+```
+
+---
+
+## PATCH /api/articulos/:id/toggle-estado
+
+Flips the article's `estado` from `true` to `false` or vice versa. No body required. Inactive articles are hidden from catalog lookups but remain referenced on existing document lines.
+
+```bash
+curl -X PATCH https://api.eme2app.es/api/articulos/b2c3d4e5-.../toggle-estado \
+  -H "Authorization: Bearer <token>"
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the article.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Estado del artículo actualizado",
+  "datos": { "id": "b2c3d4e5-...", "estado": false, ... }
+}
+```
+
+---
+
+## DELETE /api/articulos/:id
+
+Permanently (hard) deletes the article from the database. **This operation is blocked** if the article is referenced by one or more invoice lines (`detalles_facturas`) or budget lines (`detalles_presupuestos`). In that case the API returns a `400` error and the record is left untouched.
+
+```bash
+curl -X DELETE https://api.eme2app.es/api/articulos/b2c3d4e5-... \
+  -H "Authorization: Bearer <token>"
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the article to delete.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Artículo eliminado permanentemente",
+  "datos": { "id": "b2c3d4e5-...", ... }
+}
+```
+
+### Response `400` — article is referenced
+
+```json
+{
+  "estado": "error",
+  "mensaje": "No se puede eliminar: el artículo está usado en facturas o presupuestos"
+}
+```
+
+<Note>
+  If you want to retire an article without deleting it, use `PATCH /api/articulos/:id/toggle-estado` to set `estado = false`. The article will no longer appear in catalog selectors but its historical references remain valid.
+</Note>
+
+---
+
+## Associated articles (bundles)
+
+An article can have child associations, each with a `cantidad` multiplier. When a parent article is added to an invoice line the frontend can automatically expand it into its associated child articles.
+
+### GET /api/articulos/:id/asociados
+
+Lists all associations for the given article.
+
+```bash
+curl -X GET https://api.eme2app.es/api/articulos/b2c3d4e5-.../asociados \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "assoc-uuid-...",
+      "articulo_id": "b2c3d4e5-...",
+      "articulo_asociado_id": "c3d4e5f6-...",
+      "cantidad": 2
+    }
+  ]
+}
+```
+
+### POST /api/articulos/:id/asociados
+
+Adds a new child association to the article.
+
+```bash
+curl -X POST https://api.eme2app.es/api/articulos/b2c3d4e5-.../asociados \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "articulo_asociado_id": "c3d4e5f6-...", "cantidad": 2 }'
+```
+
+<ParamField body="articulo_asociado_id" type="string" required>
+  UUID of the child article to associate. Cannot be equal to the parent article's own ID (self-association returns a `400`).
+</ParamField>
+
+<ParamField body="cantidad" type="number" required>
+  Multiplier quantity. Must be a valid number.
+</ParamField>
+
+#### Response `201`
+
+```json
+{
+  "estado": "exito",
+  "datos": { "id": "assoc-uuid-...", "articulo_id": "b2c3d4e5-...", "articulo_asociado_id": "c3d4e5f6-...", "cantidad": 2 }
+}
+```
+
+### DELETE /api/articulos/:id/asociados/:asociadoId
+
+Removes a specific association record.
+
+```bash
+curl -X DELETE https://api.eme2app.es/api/articulos/b2c3d4e5-.../asociados/assoc-uuid-... \
+  -H "Authorization: Bearer <token>"
+```
+
+<ParamField path="id" type="string" required>
+  UUID of the parent article.
+</ParamField>
+
+<ParamField path="asociadoId" type="string" required>
+  UUID of the association record to remove (not the child article's ID).
+</ParamField>
+
+#### Response `200`
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Asociación eliminada"
+}
+```
+
+---
+
+## Error reference
+
+| HTTP status | `estado` | Typical `mensaje` |
+|-------------|----------|-------------------|
+| `400` | `error` | Validation error detail (e.g. `"El código es requerido"`) |
+| `400` | `error` | `"No se puede eliminar: el artículo está usado en facturas o presupuestos"` |
+| `400` | `error` | `"Un artículo no puede asociarse a sí mismo"` |
+| `404` | `error` | `"Artículo no encontrado"` |
+| `500` | `error` | Internal server error message |

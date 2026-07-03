@@ -1,0 +1,363 @@
+---
+title: "Delivery Notes API: Create, Invoice, and Group Bill"
+sidebarTitle: "Delivery Notes"
+description: "REST API for Eme2App delivery notes (albaranes). Issue notes, convert individual albaranes to invoices, or group-bill multiple notes into a single invoice."
+---
+
+Albaranes (delivery notes) sit between quotes and invoices in Eme2App's fulfilment workflow. They track goods or services delivered to a client before formal invoicing. An albarán moves through the states `editable` → `entregado` → `facturado`. Once facturado, the albarán is locked and the resulting factura links back to it through `albaran_linea_origen_id` on each detail line — enabling drill-down from invoice to delivery. You can bill a single albarán or group-bill several albaranes from the same client into one consolidated invoice. All endpoints require a Bearer token with a valid `empresa_id`.
+
+**Base path:** `/api/albaranes`
+
+**Authorization:** `Authorization: Bearer <token>` with `empresa_id` embedded.
+
+---
+
+## Endpoint reference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/albaranes` | List delivery notes (paginated, filterable) |
+| POST | `/api/albaranes` | Create delivery note |
+| GET | `/api/albaranes/proximo-numero` | Next available delivery note number |
+| GET | `/api/albaranes/:id` | Get delivery note by ID |
+| PUT | `/api/albaranes/:id` | Update delivery note |
+| PUT | `/api/albaranes/:id/estado` | Update status |
+| DELETE | `/api/albaranes/:id` | Delete delivery note |
+| POST | `/api/albaranes/:id/facturar` | Invoice a single delivery note |
+| POST | `/api/albaranes/facturar-agrupado` | Group-invoice multiple delivery notes |
+| POST | `/api/albaranes/desde-presupuesto/:presupuestoId` | Create from quote |
+| POST | `/api/albaranes/:id/enviar-email` | Send PDF by email |
+
+---
+
+## GET /api/albaranes
+
+Returns a paginated, filterable list of delivery notes for the active company.
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `page` | integer | Page number (default: 1) |
+| `pageSize` | integer | Results per page |
+| `cliente_id` | UUID | Filter by client |
+| `estado` | string | Filter by status: `editable`, `entregado`, `facturado` |
+| `desde` | YYYY-MM-DD | Filter from date (inclusive) |
+| `hasta` | YYYY-MM-DD | Filter to date (inclusive) |
+
+**Response**
+
+```json
+{
+  "datos": [
+    {
+      "id": "uuid",
+      "numero": 7,
+      "fecha": "2024-03-20",
+      "cliente_id": "uuid",
+      "estado": "entregado",
+      "subtotal": "600.00",
+      "iva_total": "126.00",
+      "total": "726.00"
+    }
+  ],
+  "paginacion": { "page": 1, "pageSize": 25, "total": 31 }
+}
+```
+
+---
+
+## POST /api/albaranes
+
+Creates a new delivery note in `editable` status.
+
+<ParamField body="cliente_id" type="string (UUID)" required>
+  Client receiving the delivery. Must belong to the active company.
+</ParamField>
+
+<ParamField body="numero" type="integer" required>
+  Delivery note number. Must be unique within the company. Use `GET /api/albaranes/proximo-numero` to get the next value.
+</ParamField>
+
+<ParamField body="fecha" type="string (YYYY-MM-DD)">
+  Delivery date. Defaults to today if omitted.
+</ParamField>
+
+<ParamField body="serie_id" type="string (UUID)">
+  Optional series assignment.
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Free-text delivery notes.
+</ParamField>
+
+<ParamField body="lineas" type="array" required>
+  Array of delivery line items. At least one line is required.
+  <Expandable title="Line item fields">
+    <ParamField body="articulo_id" type="string (UUID)" required>
+      Article/product ID. Required for non-comment lines.
+    </ParamField>
+    <ParamField body="cantidad" type="decimal" required>
+      Quantity delivered.
+    </ParamField>
+    <ParamField body="precio_unitario" type="decimal" required>
+      Unit price (used for subtotal and IVA calculation).
+    </ParamField>
+    <ParamField body="descripcion" type="string">
+      Override description for this line.
+    </ParamField>
+    <ParamField body="es_comentario" type="boolean">
+      `true` to insert a text-only comment line.
+    </ParamField>
+    <ParamField body="linea_orden" type="integer">
+      Display order. Auto-assigned if omitted.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+**Response**
+
+```json
+{
+  "id": "d1e2f3a4-0000-0000-0000-000000000003",
+  "mensaje": "Albarán creado exitosamente"
+}
+```
+
+**curl example**
+
+```bash
+curl -s -X POST https://api.eme2app.com/api/albaranes \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "cliente_id": "ccc11111-0000-0000-0000-000000000001",
+    "numero": 8,
+    "fecha": "2024-04-05",
+    "notas": "Entrega parcial pedido #2024-04",
+    "lineas": [
+      {
+        "articulo_id": "aaa00000-0000-0000-0000-000000000001",
+        "cantidad": 3,
+        "precio_unitario": 200.00
+      }
+    ]
+  }'
+```
+
+---
+
+## GET /api/albaranes/proximo-numero
+
+Returns the next sequential delivery note number for the active company.
+
+**Response**
+
+```json
+{ "proximo_numero": 9 }
+```
+
+---
+
+## GET /api/albaranes/:id
+
+Returns a single delivery note with its header and all line details.
+
+---
+
+## PUT /api/albaranes/:id
+
+Full update of a delivery note. Only notes in `editable` state can be modified. Line items are replaced entirely.
+
+<Warning>
+Notes in `facturado` state cannot be edited. You must delete the linked invoice first (which reverts the albarán back to `editable`).
+</Warning>
+
+---
+
+## PUT /api/albaranes/:id/estado
+
+Manually transitions the delivery note to a new status.
+
+<ParamField body="estado" type="string" required>
+  Target status. Allowed values: `"editable"`, `"entregado"`, `"facturado"`.
+</ParamField>
+
+**Response**
+
+```json
+{ "mensaje": "Albarán actualizado a estado: entregado" }
+```
+
+---
+
+## DELETE /api/albaranes/:id
+
+Permanently deletes a delivery note. Notes in `facturado` state cannot be deleted. If the note was created from a presupuesto and no other albaranes remain linked to it, the presupuesto is automatically restored to `borrador`.
+
+---
+
+## POST /api/albaranes/:id/facturar
+
+Converts a single delivery note into a new factura. The albarán is marked `facturado` upon success.
+
+<ParamField body="numero" type="integer" required>
+  Invoice number to assign. Use `GET /api/facturas/proximo-numero` to fetch the next value.
+</ParamField>
+
+<ParamField body="fecha" type="string (YYYY-MM-DD)">
+  Invoice date. Defaults to today.
+</ParamField>
+
+<ParamField body="serie_id" type="string (UUID)">
+  Invoice series. Required when `usa_series = true`.
+</ParamField>
+
+<ParamField body="forma_pago_id" type="string (UUID)" required>
+  Payment terms for the generated invoice.
+</ParamField>
+
+<ParamField body="estado_factura" type="string">
+  Target state of the created invoice. `"borrador"` (default) or `"confirmada"`. Passing `"confirmada"` also triggers vencimiento generation.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "id": "a1b2c3d4-0000-0000-0000-000000000010",
+  "numero": 45,
+  "fecha": "2024-04-05",
+  "mensaje": "Albarán facturado exitosamente"
+}
+```
+
+---
+
+## POST /api/albaranes/facturar-agrupado
+
+Group-bills multiple delivery notes belonging to the **same client** into a single consolidated invoice. All albaranes are marked `facturado` upon success.
+
+<ParamField body="albaran_ids" type="array of UUIDs" required>
+  List of delivery note IDs to include. All must belong to the same client and must not already be in `facturado` state.
+</ParamField>
+
+<ParamField body="numero" type="integer" required>
+  Invoice number. Must be unique within the company+series scope.
+</ParamField>
+
+<ParamField body="fecha" type="string (YYYY-MM-DD)">
+  Invoice date. Defaults to today.
+</ParamField>
+
+<ParamField body="serie_id" type="string (UUID)">
+  Invoice series. Required when `usa_series = true`.
+</ParamField>
+
+<ParamField body="forma_pago_id" type="string (UUID)" required>
+  Payment terms for the invoice.
+</ParamField>
+
+<ParamField body="estado_factura" type="string">
+  `"borrador"` (default) or `"confirmada"`. Confirming immediately generates vencimientos.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "id": "a1b2c3d4-0000-0000-0000-000000000011",
+  "numero": 46,
+  "fecha": "2024-04-05",
+  "albaranes_facturados": 3,
+  "mensaje": "Albaranes facturados exitosamente"
+}
+```
+
+**curl example**
+
+```bash
+curl -s -X POST https://api.eme2app.com/api/albaranes/facturar-agrupado \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "albaran_ids": [
+      "d1e2f3a4-0000-0000-0000-000000000003",
+      "d1e2f3a4-0000-0000-0000-000000000004",
+      "d1e2f3a4-0000-0000-0000-000000000005"
+    ],
+    "numero": 46,
+    "fecha": "2024-04-05",
+    "serie_id": "sss00000-0000-0000-0000-000000000001",
+    "forma_pago_id": "ppp00000-0000-0000-0000-000000000001",
+    "estado_factura": "confirmada"
+  }'
+```
+
+**Error responses**
+
+| Status | mensaje |
+|--------|---------|
+| 400 | `"Debes indicar al menos un albarán"` |
+| 400 | `"Todos los albaranes deben pertenecer al mismo cliente"` |
+| 400 | `"Algunos albaranes ya están facturados"` |
+| 400 | `"El número de factura ya existe"` |
+
+---
+
+## POST /api/albaranes/desde-presupuesto/:presupuestoId
+
+Creates a delivery note by copying all line items from an existing presupuesto. The presupuesto is marked `convertida` upon success.
+
+**Path parameter**
+
+| Parameter | Description |
+|-----------|-------------|
+| `presupuestoId` | UUID of the presupuesto to convert. |
+
+<Note>
+The new albarán is created with `estado: "editable"` and the next available albarán number. No request body is required — all content is sourced from the presupuesto.
+</Note>
+
+**Response**
+
+```json
+{
+  "id": "uuid-albaran",
+  "numero": 9,
+  "mensaje": "Presupuesto convertido a albarán exitosamente",
+  "albaran": { /* full albaran with detalles */ }
+}
+```
+
+---
+
+## POST /api/albaranes/:id/enviar-email
+
+Sends the delivery note PDF to a recipient email address.
+
+<ParamField body="destino" type="string" required>
+  Recipient email address.
+</ParamField>
+
+<ParamField body="pdf_base64" type="string" required>
+  Base64-encoded PDF generated client-side.
+</ParamField>
+
+<ParamField body="pdf_nombre" type="string">
+  Attachment filename. Defaults to `albaran-{numero}.pdf`.
+</ParamField>
+
+<ParamField body="asunto" type="string">
+  Email subject. Defaults to `"Albarán {numero}"`.
+</ParamField>
+
+<ParamField body="texto" type="string">
+  Plain-text email body.
+</ParamField>
+
+**Response**
+
+```json
+{ "mensaje": "Albarán enviado a cliente@empresa.com" }
+```

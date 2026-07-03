@@ -1,0 +1,315 @@
+---
+title: "Treasury: Track Due Dates and Cash Flow"
+sidebarTitle: "Treasury"
+description: "Use Eme2App's treasury module to track invoice due dates, register collections, group multiple vencimientos, and view cash-flow summaries."
+---
+
+The treasury module gives you a global, cross-invoice view of every due date (vencimiento) in your company. Rather than navigating invoice by invoice, you can see all pending, overdue, and collected instalments in one place, register payments directly, and group vencimientos from different invoices into a single collection event — ideal for remesas and batch payment runs. The module also provides an aggregated cash-flow summary for financial forecasting.
+
+---
+
+## What the Treasury Module Covers
+
+The `facturas_vencimientos` table is the backbone of the treasury view. Each row represents one instalment of an invoice's payment schedule, generated automatically when an invoice is confirmed. Treasury adds a layer on top:
+
+- **Global listing** — filter vencimientos across all invoices by date range, state, and client.
+- **Inline editing** — update date, amount, notes, or payment instrument on a pending vencimiento without going back into the invoice.
+- **Direct cobro registration** — register a payment against any vencimiento directly from the treasury view.
+- **Grouping** — consolidate multiple vencimientos (from different invoices) under a single agrupador vencimiento for one-shot collection.
+- **Cash-flow summary** — aggregated view of pending, collected, and overdue amounts.
+
+---
+
+## Cash-Flow Summary
+
+`GET /api/tesoreria/resumen`
+
+Returns aggregated cash-flow data for the authenticated company.
+
+```json
+// 200 OK
+{
+  "estado": "exito",
+  "datos": {
+    "pendiente": 12500.00,
+    "cobrado": 45800.00,
+    "vencido": 3200.00,
+    "total": 61500.00
+  }
+}
+```
+
+---
+
+## Listing Vencimientos
+
+`GET /api/tesoreria/vencimientos`
+
+Returns the full list of due dates, optionally filtered. All filters are query parameters:
+
+| Parameter | Description | Example |
+|---|---|---|
+| `fecha_desde` | Start of date range | `2025-06-01` |
+| `fecha_hasta` | End of date range | `2025-06-30` |
+| `estado_vencimiento` | Filter by vencimiento state | `pending` / `cobrado` / `partial` / `overdue` |
+| `estado_factura` | Filter by the parent invoice's state | `confirmada` / `borrador` |
+| `cliente_id` | Filter by client UUID | |
+
+```http
+GET /api/tesoreria/vencimientos?fecha_desde=2025-06-01&fecha_hasta=2025-06-30&estado_vencimiento=pending
+```
+
+```json
+// 200 OK
+{
+  "estado": "exito",
+  "datos": [ ... ],
+  "total": 12
+}
+```
+
+**Vencimiento state values:**
+
+| Estado | Meaning |
+|---|---|
+| `pending` | Awaiting payment, not yet due |
+| `partial` | Partially collected; a remainder vencimiento has been created |
+| `cobrado` | Fully collected |
+| `overdue` | Past `fecha_vencimiento` with no payment |
+
+---
+
+## Inline Editing of Vencimientos
+
+`PATCH /api/tesoreria/vencimientos/:id`
+
+Edit a `pending` vencimiento's date, amount, notes, or payment instrument without opening the invoice. Only `pending` vencimientos are editable.
+
+```json
+{
+  "fecha_vencimiento": "2025-07-15",
+  "importe": 1500.00,
+  "instrumento_id": "uuid-instrumento",
+  "notas": "Aplazado por acuerdo con cliente"
+}
+```
+
+```json
+// 200 OK
+{
+  "estado": "exito",
+  "datos": { ... },
+  "mensaje": "Vencimiento actualizado"
+}
+```
+
+<Warning>
+You cannot change the `importe` of a vencimiento that already has a cobro registered. Revert the cobro first; date and notes remain editable even with cobros present.
+</Warning>
+
+---
+
+## Registering a Cobro
+
+`POST /api/tesoreria/cobros`
+
+Register a payment against a specific vencimiento. The `instrumento_id` (payment instrument) is mandatory.
+
+**Required fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `vencimiento_id` | `string` (UUID) | The vencimiento being paid |
+| `importe` | `number` | Amount paid — must be > 0 and ≤ vencimiento amount |
+| `fecha_pago` | `string` | Payment date (`YYYY-MM-DD`) |
+| `instrumento_id` | `string` (UUID) | Active payment instrument |
+
+**Optional fields:** `fecha_vencimiento_resto` (required for partial payments), `notas`.
+
+```json
+// POST /api/tesoreria/cobros
+{
+  "vencimiento_id": "<uuid>",
+  "importe": 1200.00,
+  "fecha_pago": "2025-06-18",
+  "instrumento_id": "<uuid>",
+  "notas": "Transferencia SEPA recibida"
+}
+```
+
+```json
+// 201 Created
+{
+  "estado": "exito",
+  "mensaje": "Cobro registrado exitosamente",
+  "cobro": { "id": "<cobro_uuid>", ... },
+  "vencimiento_actualizado": { "id": "<uuid>", "estado": "cobrado" }
+}
+```
+
+**Partial payment:** if `importe` is less than the full vencimiento amount, you must also supply `fecha_vencimiento_resto`. The backend marks the current vencimiento as `partial` and creates a new vencimiento for the remainder:
+
+```json
+{
+  "vencimiento_id": "<uuid>",
+  "importe": 500.00,
+  "fecha_pago": "2025-06-18",
+  "instrumento_id": "<uuid>",
+  "fecha_vencimiento_resto": "2025-07-31"
+}
+```
+
+---
+
+## Reverting a Cobro
+
+`POST /api/tesoreria/vencimientos/:id/revertir-cobro`
+
+Undoes all cobros linked to a vencimiento and restores it to `pending` state. Use this to correct a mistakenly registered payment.
+
+```json
+// 200 OK
+{
+  "estado": "exito",
+  "mensaje": "Cobro revertido exitosamente",
+  "datos": { "id": "<uuid>", "estado": "pending", ... }
+}
+```
+
+If a partial payment created a remainder vencimiento, that remainder is also cleaned up automatically.
+
+---
+
+## Grouping Vencimientos
+
+`POST /api/tesoreria/cobros/agrupar`
+
+Consolidate two or more vencimientos (from any invoices, same client or different) into a single collection event. This creates an **agrupador vencimiento** — a virtual due date that represents the combined amount — and links all child vencimientos to it via `agrupador_id`.
+
+**Required fields:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `vencimiento_ids` | `string[]` | At least two vencimiento UUIDs |
+| `importe` | `number` | Total amount of the grouped collection |
+| `fecha_vencimiento` | `string` | Due date for the group |
+
+**Optional fields:** `instrumento_id`, `notas`.
+
+```json
+// POST /api/tesoreria/cobros/agrupar
+{
+  "vencimiento_ids": ["<uuid-1>", "<uuid-2>", "<uuid-3>"],
+  "importe": 4500.00,
+  "fecha_vencimiento": "2025-06-30",
+  "instrumento_id": "<uuid-instrumento>",
+  "notas": "Remesa junio 2025"
+}
+```
+
+```json
+// 201 Created
+{
+  "estado": "exito",
+  "agrupador_id": "<uuid-agrupador>",
+  ...
+}
+```
+
+<Warning>
+Once vencimientos are grouped, the individual vencimientos are locked for editing from both the invoice and treasury views. You must ungroup them first before modifying amounts, dates, or registering individual cobros.
+</Warning>
+
+---
+
+## Viewing Grouped Children
+
+`GET /api/tesoreria/vencimientos/:id/hijos`
+
+Returns all vencimientos that belong to a given agrupador:
+
+```json
+// 200 OK
+{
+  "estado": "exito",
+  "datos": [
+    { "id": "<uuid-1>", "factura_id": "...", "importe": 1500.00, ... },
+    { "id": "<uuid-2>", "factura_id": "...", "importe": 3000.00, ... }
+  ]
+}
+```
+
+---
+
+## Ungrouping Vencimientos
+
+`POST /api/tesoreria/vencimientos/:id/desagrupar`
+
+Dissolves a group by removing `agrupador_id` from all child vencimientos and deleting the agrupador row. The children return to `pending` and become individually editable again.
+
+```json
+// 200 OK
+{ "estado": "exito", ... }
+```
+
+<Note>
+If the agrupador vencimiento already has a cobro registered, the cobro must be reverted before ungrouping is possible. Attempting to ungroup with an active cobro returns a `400` error.
+</Note>
+
+---
+
+## Payment Instruments (Instrumentos de Pago)
+
+Payment instruments (`instrumentos_pago`) define the means of collection — bank transfer, direct debit, cheque, card, etc. They are referenced by both `facturas_vencimientos` (expected instrument) and `cobros` (actual instrument used).
+
+Each instrument has:
+
+| Field | Description |
+|---|---|
+| `nombre` | Descriptive name (e.g. `"Transferencia bancaria"`) |
+| `codigo` | Short code (e.g. `"TRF"`) |
+| `remesable` | If `true`, the instrument supports batch remittance files |
+| `activo` | Only active instruments can be assigned to vencimientos or cobros |
+| `empresa_id` | Company-scoped, or `null` for system-wide defaults |
+
+Configure your instruments in **Configuración → Instrumentos de Pago**. Any instrument with `activo = false` will be rejected when registering a cobro.
+
+---
+
+## Typical Treasury Workflow
+
+<Steps>
+  <Step title="Review upcoming due dates">
+    Call `GET /api/tesoreria/vencimientos?estado_vencimiento=pending&fecha_hasta=2025-06-30` to see all payments due before month end.
+  </Step>
+  <Step title="Check the cash-flow summary">
+    Call `GET /api/tesoreria/resumen` to compare pending inflows against overdue amounts.
+  </Step>
+  <Step title="Optionally group vencimientos">
+    If several clients are paying via the same remesa run, call `POST /api/tesoreria/cobros/agrupar` to consolidate them into one collection event.
+  </Step>
+  <Step title="Register each cobro">
+    As payments are received, call `POST /api/tesoreria/cobros` with the `vencimiento_id`, `importe`, `fecha_pago`, and `instrumento_id`.
+  </Step>
+  <Step title="Handle partial payments">
+    For short payments, include `fecha_vencimiento_resto` in the cobro body. A remainder vencimiento is created automatically for the unpaid balance.
+  </Step>
+  <Step title="Correct a mistake">
+    If a cobro was registered in error, call `POST /api/tesoreria/vencimientos/:id/revertir-cobro` to undo it and restore the vencimiento to `pending`.
+  </Step>
+</Steps>
+
+---
+
+## API Quick Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/tesoreria/resumen` | Cash-flow summary (pending, collected, overdue) |
+| `GET` | `/api/tesoreria/vencimientos` | Filterable global due-date list |
+| `PATCH` | `/api/tesoreria/vencimientos/:id` | Inline-edit a pending vencimiento |
+| `POST` | `/api/tesoreria/cobros` | Register a cobro against a vencimiento |
+| `POST` | `/api/tesoreria/vencimientos/:id/revertir-cobro` | Revert all cobros on a vencimiento |
+| `POST` | `/api/tesoreria/cobros/agrupar` | Group vencimientos into one collection event |
+| `GET` | `/api/tesoreria/vencimientos/:id/hijos` | List children of an agrupador vencimiento |
+| `POST` | `/api/tesoreria/vencimientos/:id/desagrupar` | Dissolve a vencimiento group |

@@ -1,20 +1,86 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Eme2App: Invoicing & Budgeting for Spanish Businesses"
+sidebarTitle: "Home"
+description: "Eme2App is a full-stack invoicing and budgeting platform built with React 19 and Node.js/Express, with modules for invoices, quotes, delivery notes, expenses, treasury, and AEAT tax validation."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Eme2App is a production-ready SaaS for managing the complete billing lifecycle of a Spanish business — from creating quotes and delivery notes to issuing invoices, tracking treasury due dates, validating tax identities against AEAT, and generating Excel/PDF reports. It runs as a React 19 PWA connected to a Node.js/Express API backed by PostgreSQL (Supabase-compatible).
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get a local dev environment running in under 10 minutes with both frontend and backend.
+  </Card>
+  <Card title="Deploy to Vercel" icon="cloud" href="/deployment">
+    Step-by-step guide to deploying the frontend and backend on Vercel with Supabase.
+  </Card>
+  <Card title="Core Modules" icon="layer-group" href="/modules/invoices">
+    Invoices, quotes, delivery notes, expenses, and treasury — everything your billing workflow needs.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/authentication">
+    Complete REST API reference with request/response schemas, authentication, and examples.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What's inside
+
+<CardGroup cols={3}>
+  <Card title="Invoices" icon="file-invoice" href="/modules/invoices">
+    Create, emit, cancel, and track payment collection on invoices with per-series numbering.
+  </Card>
+  <Card title="Quotes" icon="file-lines" href="/modules/quotes">
+    Build budgets and convert accepted quotes directly into draft invoices.
+  </Card>
+  <Card title="Delivery Notes" icon="truck" href="/modules/delivery-notes">
+    Manage delivery notes individually or group-bill multiple albaranes in one invoice.
+  </Card>
+  <Card title="Expenses" icon="receipt" href="/modules/expenses">
+    Record purchase invoices and supplier expenses with VAT breakdown.
+  </Card>
+  <Card title="Treasury" icon="building-columns" href="/modules/treasury">
+    Track due dates, register collections, and view cash-flow summaries.
+  </Card>
+  <Card title="PDF Designer" icon="pen-ruler" href="/configuration/pdf-designer">
+    WYSIWYG editor for invoice and quote PDF templates with live preview and token substitution.
+  </Card>
+  <Card title="AEAT Validation" icon="shield-check" href="/integrations/aeat">
+    Validate Spanish NIF/CIF identities individually or in bulk (up to 20,000) against the AEAT census.
+  </Card>
+  <Card title="Reports & Export" icon="chart-bar" href="/integrations/reports-export">
+    Generate VAT reports, cash-flow summaries, and export to Excel or PDF.
+  </Card>
+  <Card title="Email Integration" icon="envelope" href="/integrations/email-smtp">
+    Send invoices, quotes, and delivery notes by email directly from the app via SMTP.
+  </Card>
+</CardGroup>
+
+## How it works
+
+<Steps>
+  <Step title="Set up your company">
+    Configure your company profile, fiscal data, NIF, logo, and SMTP settings under **Configuration → Company**.
+  </Step>
+  <Step title="Add clients and articles">
+    Build your catalog by adding clients with their fiscal régimen and payment defaults, and articles with VAT rates.
+  </Step>
+  <Step title="Create documents">
+    Issue invoices, quotes, delivery notes, and log expenses. Convert quotes to invoices or group delivery notes into a single invoice.
+  </Step>
+  <Step title="Manage collections">
+    Use the Treasury module to track due dates, register collections, and monitor your cash flow in real time.
+  </Step>
+</Steps>
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 19 + Vite 7, Tailwind CSS, PWA |
+| Backend | Node.js + Express 4 |
+| Auth | JWT + bcryptjs |
+| Database | PostgreSQL via Prisma + `@prisma/adapter-pg` |
+| Hosting | Vercel (frontend + backend) |
+| Compatible DB | Supabase (pooler or direct URL) |
+
+<Note>
+Eme2App targets Spanish accounting requirements — IVA (VAT), IRPF, regímenes fiscales, and AEAT census validation are first-class citizens throughout the platform.
+</Note>

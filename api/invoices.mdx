@@ -1,0 +1,493 @@
+---
+title: "Invoices API: CRUD, Cobros, Vencimientos, and Email"
+sidebarTitle: "Invoices"
+description: "REST API reference for Eme2App invoices. Create, read, update, void, manage due dates (vencimientos), register collections (cobros), and send by email."
+---
+
+The Invoices API is the core of Eme2App's billing workflow. A factura moves through a lifecycle — `borrador` → `confirmada` → `anulada` — with strict transition rules. Confirming a factura automatically generates `facturas_vencimientos` (due-date instalments) derived from the assigned `forma_pago`. Voiding a confirmed invoice creates a mirror rectificativa with negative amounts. All endpoints require a Bearer token that contains a valid `empresa_id`.
+
+**Base path:** `/api/facturas`
+
+**Authorization:** `Authorization: Bearer <token>` with `empresa_id` embedded (call `POST /api/auth/seleccionar-empresa` first if needed).
+
+---
+
+## Endpoint reference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/facturas` | List invoices (paginated) |
+| POST | `/api/facturas` | Create invoice |
+| GET | `/api/facturas/proximo-numero` | Next available invoice number |
+| GET | `/api/facturas/informe-cobros` | Collections report |
+| GET | `/api/facturas/:id` | Get invoice by ID |
+| PUT | `/api/facturas/:id` | Update invoice |
+| PUT | `/api/facturas/:id/estado` | Transition invoice status |
+| PATCH | `/api/facturas/:id/estado-emision` | Update emission status |
+| POST | `/api/facturas/:id/anular` | Void a confirmed invoice |
+| DELETE | `/api/facturas/:id` | Delete a draft invoice |
+| POST | `/api/facturas/:id/enviar-email` | Send PDF by email |
+| POST | `/api/facturas/:id/cobros` | Register a collection against a vencimiento |
+| GET | `/api/facturas/:id/cobros` | List collections for an invoice |
+| DELETE | `/api/facturas/:id/cobros/:cobro_id` | Delete cobro and revert vencimiento |
+| PUT | `/api/facturas/cobros/:id` | Update a cobro |
+| DELETE | `/api/facturas/cobros/:id` | Delete a cobro |
+| GET | `/api/facturas/:id/vencimientos` | List all due dates |
+| GET | `/api/facturas/:id/vencimientos-disponibles` | List payable (pending/partial) due dates |
+| POST | `/api/facturas/:id/vencimientos` | Create a manual due date |
+| PATCH | `/api/facturas/:id/vencimientos/:vencimiento_id` | Update a due date |
+| DELETE | `/api/facturas/:id/vencimientos/:vencimiento_id` | Delete a due date |
+| POST | `/api/facturas/:id/vencimientos/restaurar` | Restore due dates from forma_pago template |
+| POST | `/api/facturas/:id/vencimientos/:vencimiento_id/revertir-cobro` | Revert all cobros on a due date |
+
+---
+
+## GET /api/facturas
+
+Returns a paginated list of invoices belonging to the active company.
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `page` | integer | Page number (default: 1) |
+| `pageSize` | integer | Results per page (default: company setting) |
+
+**Response**
+
+```json
+{
+  "datos": [
+    {
+      "id": "uuid",
+      "numero": 42,
+      "serie": "A",
+      "fecha": "2024-03-15",
+      "cliente_id": "uuid",
+      "estado": "confirmada",
+      "estado_emision": "email",
+      "subtotal": "1000.00",
+      "iva_monto": "210.00",
+      "irpf_monto": "0.00",
+      "total": "1210.00"
+    }
+  ],
+  "paginacion": { "page": 1, "pageSize": 25, "total": 137 }
+}
+```
+
+---
+
+## POST /api/facturas
+
+Creates a new invoice in `borrador` status. Totals (subtotal, IVA, IRPF) are calculated server-side from the article catalogue; you do not send pre-computed tax amounts.
+
+<ParamField body="cliente_id" type="string (UUID)" required>
+  ID of the client. Must belong to the active company.
+</ParamField>
+
+<ParamField body="numero" type="integer" required>
+  Invoice number. Must be unique within the combination of `empresa_id` and `serie`. Use `GET /api/facturas/proximo-numero` to fetch the next available value.
+</ParamField>
+
+<ParamField body="fecha" type="string (YYYY-MM-DD)" required>
+  Invoice date.
+</ParamField>
+
+<ParamField body="serie_id" type="string (UUID)">
+  ID of the invoice series (`series_facturas`). Required when the company has `usa_series = true`.
+</ParamField>
+
+<ParamField body="serie" type="string">
+  Series code (e.g. `"A"`). Alternative to `serie_id`; the server resolves the ID from the code.
+</ParamField>
+
+<ParamField body="forma_pago_id" type="string (UUID)">
+  Payment terms. If omitted, the client's `forma_pago_defecto_id` is used. Drives automatic vencimiento generation when the invoice is confirmed.
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Free-text notes printed on the invoice. Max 1000 characters.
+</ParamField>
+
+<ParamField body="detalles" type="array" required>
+  Array of invoice line items. At least one line is required.
+  <Expandable title="Line item fields">
+    <ParamField body="articulo_id" type="string (UUID)" required>
+      Article/product ID from the catalogue. Drives IVA rate lookup. Required for non-comment lines.
+    </ParamField>
+    <ParamField body="cantidad" type="decimal" required>
+      Quantity. Use `0` for comment lines.
+    </ParamField>
+    <ParamField body="precio_unitario" type="decimal" required>
+      Unit price before tax. Use `0` for comment lines.
+    </ParamField>
+    <ParamField body="descripcion" type="string">
+      Override description. If omitted the article's `descripcion` is used.
+    </ParamField>
+    <ParamField body="es_comentario" type="boolean">
+      Set `true` to insert a text-only comment line (no article, zero amounts).
+    </ParamField>
+    <ParamField body="linea_orden" type="integer">
+      Display order of the line. Auto-assigned by index if omitted.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+**Response**
+
+```json
+{
+  "id": "a1b2c3d4-0000-0000-0000-000000000001",
+  "mensaje": "Factura creada exitosamente"
+}
+```
+
+<Warning>
+The server rejects the request with `400` if `numero` is already used in the same `empresa_id`+`serie` scope, or if any `articulo_id` does not exist or is inactive.
+</Warning>
+
+**curl example**
+
+```bash
+curl -s -X POST https://api.eme2app.com/api/facturas \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "cliente_id": "ccc11111-0000-0000-0000-000000000001",
+    "numero": 43,
+    "fecha": "2024-04-01",
+    "serie_id": "sss00000-0000-0000-0000-000000000001",
+    "forma_pago_id": "ppp00000-0000-0000-0000-000000000001",
+    "notas": "Proyecto Q2",
+    "detalles": [
+      {
+        "articulo_id": "aaa00000-0000-0000-0000-000000000001",
+        "cantidad": 5,
+        "precio_unitario": 200.00,
+        "descripcion": "Horas de consultoría"
+      }
+    ]
+  }'
+```
+
+---
+
+## GET /api/facturas/proximo-numero
+
+Returns the next sequential invoice number for the given series.
+
+**Query parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `serie_id` | UUID of the series. |
+| `serie` | Series code. Alternative to `serie_id`. |
+
+**Response**
+
+```json
+{ "proximo_numero": 44 }
+```
+
+---
+
+## GET /api/facturas/:id
+
+Returns a single invoice with its header, line details, and totals.
+
+---
+
+## PUT /api/facturas/:id
+
+Full update of a `borrador` or `confirmada` invoice. The body mirrors `POST /api/facturas`. Existing line items are replaced entirely.
+
+<Warning>
+An invoice with registered cobros cannot be modified. Remove all cobros from the vencimientos panel before editing.
+</Warning>
+
+---
+
+## PUT /api/facturas/:id/estado
+
+Transitions the invoice status.
+
+<ParamField body="estado" type="string" required>
+  Target status. Allowed values: `"borrador"`, `"confirmada"`, `"anulada"`.
+</ParamField>
+
+**Transition rules**
+
+| From | To | Effect |
+|------|----|--------|
+| `borrador` | `confirmada` | Generates vencimientos from `forma_pago` |
+| `confirmada` | `borrador` | Deletes vencimientos (only if none are cobrado/partial) |
+| `confirmada` | `anulada` | Use `POST /:id/anular` instead |
+| `anulada` | any | Not allowed |
+
+---
+
+## PATCH /api/facturas/:id/estado-emision
+
+Updates the emission tracking state. Transitions are irreversible (one-way).
+
+<ParamField body="estado_emision" type="string" required>
+  One of `"sin_emitir"`, `"pdf"`, `"email"`. Can only progress forward.
+</ParamField>
+
+---
+
+## POST /api/facturas/:id/anular
+
+Voids a confirmed invoice by creating a rectificativa (mirror invoice with negative amounts). The original invoice is marked `anulada`.
+
+<ParamField body="serie_rectificativa" type="string">
+  Code of the rectificative series to use. Required only when the company has more than one active rectificative series configured.
+</ParamField>
+
+<ParamField body="fecha_anulacion" type="string (YYYY-MM-DD)">
+  Date of the void document. Defaults to today.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "mensaje": "Factura 42 anulada. Se generó la factura 5 con serie R e importes en negativo.",
+  "factura_anulada_id": "uuid-original",
+  "factura_espejo_id": "uuid-rectificativa",
+  "numero_factura_espejo": 5,
+  "serie_factura_espejo": "R"
+}
+```
+
+<Note>
+When the original invoice had cobros, the void operation creates corresponding negative cobros on the original invoice to zero out the accounting.
+</Note>
+
+---
+
+## DELETE /api/facturas/:id
+
+Permanently deletes a `borrador` invoice and its line items. If the invoice originated from a presupuesto and no other linked invoices remain, the presupuesto is restored to `borrador`.
+
+<Warning>
+Only draft invoices without registered cobros can be deleted. Confirmed invoices must be voided with `POST /:id/anular` first.
+</Warning>
+
+---
+
+## POST /api/facturas/:id/enviar-email
+
+Sends the invoice PDF to a recipient. After a successful send, `estado_emision` is automatically updated to `"email"`.
+
+<ParamField body="destino" type="string" required>
+  Recipient email address.
+</ParamField>
+
+<ParamField body="pdf_base64" type="string" required>
+  Base64-encoded PDF content generated client-side.
+</ParamField>
+
+<ParamField body="pdf_nombre" type="string">
+  Attachment filename. Defaults to `factura-{serie}-{numero}.pdf`.
+</ParamField>
+
+<ParamField body="asunto" type="string">
+  Email subject. Defaults to `"Factura {serie}-{numero}"`.
+</ParamField>
+
+<ParamField body="texto" type="string">
+  Email body text. Plain text, not HTML.
+</ParamField>
+
+<Note>
+Only confirmed invoices (`estado !== "borrador"`) can be sent. Draft invoices return `400`.
+</Note>
+
+---
+
+## GET /api/facturas/informe-cobros
+
+Paginated report of all registered collections (cobros) for the active company.
+
+---
+
+## POST /api/facturas/:id/cobros
+
+Registers a collection against a specific vencimiento. Supports full and partial payment.
+
+<ParamField body="vencimiento_id" type="string (UUID)" required>
+  The due-date instalment to pay.
+</ParamField>
+
+<ParamField body="importe" type="decimal" required>
+  Amount collected. Must be > 0 and ≤ the vencimiento's remaining balance.
+</ParamField>
+
+<ParamField body="fecha_pago" type="string (YYYY-MM-DD)" required>
+  Date the payment was received.
+</ParamField>
+
+<ParamField body="instrumento_id" type="string (UUID)" required>
+  Payment instrument (e.g. bank transfer, direct debit). Must be active.
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Optional internal note on the collection.
+</ParamField>
+
+<ParamField body="fecha_vencimiento_resto" type="string (YYYY-MM-DD)">
+  Required for **partial** payments only. The due date for the remaining balance. Must be after `fecha_pago`.
+</ParamField>
+
+**Response (full payment)**
+
+```json
+{
+  "cobro": {
+    "id": "uuid-cobro",
+    "factura_id": "uuid-factura",
+    "vencimiento_id": "uuid-vencimiento",
+    "importe": 1210.00
+  },
+  "vencimiento_actualizado": { "id": "uuid-vencimiento", "estado": "cobrado" }
+}
+```
+
+**Response (partial payment)**
+
+```json
+{
+  "cobro": { "id": "uuid-cobro", "importe": 605.00 },
+  "vencimiento_actualizado": { "id": "uuid-vencimiento", "estado": "partial", "importe": 605.00 },
+  "vencimiento_nuevo": { "id": "uuid-resto", "importe": 605.00, "fecha_vencimiento": "2024-05-01", "estado": "pending" }
+}
+```
+
+---
+
+## GET /api/facturas/:id/cobros
+
+Returns all cobros for the invoice along with a payment summary.
+
+**Response**
+
+```json
+{
+  "cobros": [
+    {
+      "id": "uuid",
+      "importe": "1210.00",
+      "fecha_pago": "2024-04-05",
+      "instrumento_id": "uuid",
+      "vencimiento_id": "uuid"
+    }
+  ],
+  "resumen": {
+    "total_factura": 1210.00,
+    "total_cobrado": 1210.00,
+    "pendiente": 0.00,
+    "porcentaje_cobrado": 100
+  }
+}
+```
+
+---
+
+## DELETE /api/facturas/:id/cobros/:cobro_id
+
+Deletes a cobro and reverts the associated vencimiento to `pending`. If the payment was partial and a rest vencimiento was created, that rest vencimiento is also removed.
+
+---
+
+## PUT /api/facturas/cobros/:id
+
+Updates metadata on a cobro (date, instrument, notes). The `importe` field cannot be changed for cobros linked to a vencimiento — delete and re-create the cobro instead.
+
+<ParamField body="fecha_pago" type="string (YYYY-MM-DD)">New payment date.</ParamField>
+<ParamField body="instrumento_id" type="string (UUID)">Replacement payment instrument.</ParamField>
+<ParamField body="referencia" type="string">External reference number.</ParamField>
+<ParamField body="notas" type="string">Internal note.</ParamField>
+
+---
+
+## GET /api/facturas/:id/vencimientos
+
+Returns all due-date instalments for the invoice, including their current `estado` (`pending`, `partial`, `cobrado`, `overdue`).
+
+---
+
+## GET /api/facturas/:id/vencimientos-disponibles
+
+Returns only vencimientos with status `pending` or `partial` — i.e. those that can still receive a cobro.
+
+---
+
+## POST /api/facturas/:id/vencimientos
+
+Manually adds a new due-date instalment to a confirmed invoice.
+
+<ParamField body="numero_cuota" type="integer" required>
+  Instalment sequence number. Must not duplicate an existing cuota on this invoice.
+</ParamField>
+
+<ParamField body="importe" type="decimal" required>
+  Amount due on this instalment.
+</ParamField>
+
+<ParamField body="fecha_vencimiento" type="string (YYYY-MM-DD)" required>
+  Due date.
+</ParamField>
+
+<ParamField body="instrumento_id" type="string (UUID)">
+  Payment instrument. Falls back to the company's default instrument.
+</ParamField>
+
+<ParamField body="notas" type="string">
+  Optional note.
+</ParamField>
+
+---
+
+## PATCH /api/facturas/:id/vencimientos/:vencimiento_id
+
+Updates an existing vencimiento. If the vencimiento has a cobro, only `fecha_vencimiento` and `notas` can be changed (the `importe` is locked to the cobro amount).
+
+<ParamField body="importe" type="decimal">New instalment amount.</ParamField>
+<ParamField body="fecha_vencimiento" type="string (YYYY-MM-DD)">New due date.</ParamField>
+<ParamField body="instrumento_id" type="string (UUID)">Replacement instrument.</ParamField>
+<ParamField body="notas" type="string">Updated note.</ParamField>
+
+---
+
+## DELETE /api/facturas/:id/vencimientos/:vencimiento_id
+
+Removes a vencimiento. Blocked if the vencimiento has a cobro or is part of an agrupador.
+
+---
+
+## POST /api/facturas/:id/vencimientos/restaurar
+
+Regenerates the full vencimiento schedule from the invoice's `forma_pago` template. Only available for confirmed invoices with no existing cobros.
+
+---
+
+## POST /api/facturas/:id/vencimientos/:vencimiento_id/revertir-cobro
+
+Reverts all cobros on a specific vencimiento, restoring it to `pending`. Any rest vencimientos created by partial payments are also removed. Use this to undo a collection entered in error.
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Vencimiento revertido: 1 cobro(s) eliminado(s)",
+  "datos": {
+    "id": "uuid",
+    "estado": "pending",
+    "importe": "1210.00",
+    "fecha_vencimiento": "2024-04-30"
+  }
+}
+```

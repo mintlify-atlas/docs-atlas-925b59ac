@@ -1,0 +1,345 @@
+---
+title: "Authentication: JWT Login and Company Selection"
+sidebarTitle: "Authentication"
+description: "Authenticate with Eme2App using JWT Bearer tokens. Log in, retrieve the current user, select an active company, change passwords, and handle password resets."
+---
+
+Eme2App uses stateless JWT Bearer authentication. Every request to a protected resource must include an `Authorization: Bearer <token>` header. The token is issued at login and encodes the user's `id`, `email`, `rol`, and — after company selection — the `empresa_id` that scopes all subsequent data operations to a single company. Only `/api/version` and the `/api/auth/*` endpoints themselves are public.
+
+<Note>
+**Two-step login flow for multi-company users**
+
+1. `POST /api/auth/login` — authenticates credentials and returns a token.
+   - If the user belongs to **one** company, `empresa_id` is already embedded and the token is ready to use.
+   - If the user belongs to **multiple** companies, the response includes `requiere_seleccion_empresa: true` plus the list of available companies. The initial token does **not** contain `empresa_id`.
+2. `POST /api/auth/seleccionar-empresa` — exchange the initial token for a new token that contains the chosen `empresa_id`. Use **this new token** for all subsequent requests.
+</Note>
+
+---
+
+## Token payload
+
+```json
+{
+  "id": "uuid",
+  "email": "usuario@empresa.com",
+  "rol": "user",
+  "empresa_id": "uuid",   // absent until seleccionar-empresa is called
+  "iat": 1700000000,
+  "exp": 1700604800
+}
+```
+
+Roles are `superadmin`, `admin`, and `user`. Most business endpoints require `admin` or `user` with a valid `empresa_id` in the token.
+
+---
+
+## POST /api/auth/login
+
+Validates email and password, returns a signed JWT and basic user information. No authorization header required.
+
+**Request body**
+
+<ParamField body="email" type="string" required>
+  The user's registered email address. Case-insensitive.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The user's plain-text password.
+</ParamField>
+
+**Response — single company**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Login exitoso",
+  "datos": {
+    "token": "eyJhbGciOiJIUzI1NiIs...",
+    "usuario": {
+      "id": "a1b2c3d4-...",
+      "email": "usuario@empresa.com",
+      "nombre": "Ana García",
+      "rol": "user",
+      "empresa_id": "f1e2d3c4-...",
+      "tema": "light"
+    }
+  }
+}
+```
+
+**Response — multiple companies**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Login exitoso",
+  "datos": {
+    "requiere_seleccion_empresa": true,
+    "token": "eyJhbGciOiJIUzI1NiIs...",
+    "usuario": { "id": "...", "email": "...", "nombre": "...", "rol": "user", "tema": "light" },
+    "empresas": [
+      { "empresa_id": "uuid-1", "nombre": "Empresa Alpha SL", "nombre_comercial": "Alpha" },
+      { "empresa_id": "uuid-2", "nombre": "Beta Servicios SL", "nombre_comercial": "Beta" }
+    ]
+  }
+}
+```
+
+<ResponseField name="estado" type="string">
+  `"exito"` on success, `"error"` on failure.
+</ResponseField>
+
+<ResponseField name="datos.token" type="string">
+  Signed JWT. Valid for 7 days by default (`JWT_EXPIRE` env var).
+</ResponseField>
+
+<ResponseField name="datos.usuario" type="object">
+  <Expandable title="usuario fields">
+    <ResponseField name="id" type="string">UUID of the authenticated user.</ResponseField>
+    <ResponseField name="email" type="string">User email.</ResponseField>
+    <ResponseField name="nombre" type="string">Display name.</ResponseField>
+    <ResponseField name="rol" type="string">`superadmin`, `admin`, or `user`.</ResponseField>
+    <ResponseField name="empresa_id" type="string">Present only when the user has exactly one company or after company selection.</ResponseField>
+    <ResponseField name="tema" type="string">`light` or `dark`.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="datos.requiere_seleccion_empresa" type="boolean">
+  Present and `true` when the user belongs to more than one company. Call `POST /api/auth/seleccionar-empresa` with the initial token to receive a company-scoped token.
+</ResponseField>
+
+<ResponseField name="datos.empresas" type="array">
+  Present only when `requiere_seleccion_empresa` is `true`. Each item contains `empresa_id`, `nombre`, and `nombre_comercial`.
+</ResponseField>
+
+**curl example**
+
+```bash
+curl -s -X POST https://api.eme2app.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "usuario@empresa.com",
+    "password": "mi_contraseña"
+  }'
+```
+
+**Error responses**
+
+| Status | mensaje |
+|--------|---------|
+| 400 | `"Credenciales inválidas"` |
+| 400 | `"Usuario desactivado"` |
+| 400 | `"Usuario no tiene empresas asignadas"` |
+
+---
+
+## GET /api/auth/me
+
+Returns the authenticated user's profile and their list of accessible companies.
+
+**Authorization:** `Bearer <token>` required.
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "datos": {
+    "id": "a1b2c3d4-...",
+    "email": "usuario@empresa.com",
+    "nombre": "Ana García",
+    "rol": "user",
+    "empresa_id": "f1e2d3c4-...",
+    "empresas": [
+      {
+        "empresa_id": "f1e2d3c4-...",
+        "nombre": "Empresa Alpha SL",
+        "nombre_comercial": "Alpha"
+      }
+    ]
+  }
+}
+```
+
+<ResponseField name="datos.empresa_id" type="string | null">
+  The `empresa_id` currently embedded in the token. `null` if the user authenticated without selecting a company yet.
+</ResponseField>
+
+<ResponseField name="datos.empresas" type="array">
+  List of active companies the user belongs to. Not included for `superadmin` users.
+</ResponseField>
+
+---
+
+## POST /api/auth/seleccionar-empresa
+
+Exchanges the current token for a new JWT that includes the chosen `empresa_id`. All subsequent API calls must use this new token.
+
+**Authorization:** `Bearer <token>` required.
+
+<ParamField body="empresa_id" type="string (UUID)" required>
+  The UUID of the company to activate. Must be one of the companies returned in the login response or from `GET /api/auth/me`.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Empresa seleccionada correctamente",
+  "datos": {
+    "token": "eyJhbGciOiJIUzI1NiIs...",
+    "usuario": {
+      "id": "a1b2c3d4-...",
+      "email": "usuario@empresa.com",
+      "nombre": "Ana García",
+      "rol": "user",
+      "empresa_id": "f1e2d3c4-...",
+      "tema": "light"
+    }
+  }
+}
+```
+
+<ResponseField name="datos.token" type="string">
+  New signed JWT with `empresa_id` embedded. Replace the previous token immediately.
+</ResponseField>
+
+**curl example**
+
+```bash
+# Step 1 — login
+TOKEN=$(curl -s -X POST https://api.eme2app.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"usuario@empresa.com","password":"mi_contraseña"}' \
+  | jq -r '.datos.token')
+
+# Step 2 — select company (only needed for multi-company users)
+NEW_TOKEN=$(curl -s -X POST https://api.eme2app.com/api/auth/seleccionar-empresa \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"empresa_id":"f1e2d3c4-0000-0000-0000-000000000000"}' \
+  | jq -r '.datos.token')
+
+# Step 3 — use the new token for all subsequent requests
+curl -s https://api.eme2app.com/api/facturas \
+  -H "Authorization: Bearer $NEW_TOKEN"
+```
+
+**Error responses**
+
+| Status | mensaje |
+|--------|---------|
+| 400 | `"empresa_id debe ser un UUID válido"` |
+| 400 | `"La empresa solicitada no está asignada a este usuario"` |
+| 401 | `"Token no proporcionado"` / `"No autorizado"` |
+
+---
+
+## POST /api/auth/cambiar-password
+
+Changes the authenticated user's password. Requires the current password for verification.
+
+**Authorization:** `Bearer <token>` required.
+
+<ParamField body="passwordActual" type="string" required>
+  The user's current password.
+</ParamField>
+
+<ParamField body="passwordNueva" type="string" required>
+  The desired new password. Minimum 6 characters.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Contraseña actualizada exitosamente"
+}
+```
+
+**Error responses**
+
+| Status | mensaje |
+|--------|---------|
+| 400 | `"Contraseña actual incorrecta"` |
+| 400 | `"La contraseña debe tener al menos 6 caracteres"` |
+
+---
+
+## POST /api/auth/solicitar-reset
+
+Sends a password-reset link to the provided email address. The response is intentionally vague to avoid leaking which email addresses are registered. No authorization header required.
+
+<Warning>
+If the account is deactivated, the server returns a `403` error with an explicit message rather than a silent success. This is by design — a deactivated account requires administrator action.
+</Warning>
+
+<ParamField body="email" type="string" required>
+  The email address associated with the account.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Si el email está registrado, recibirás un link para restablecer tu contraseña. Revise la carpeta SPAM"
+}
+```
+
+The reset link is valid for **1 hour** and contains a signed JWT bound to the current password hash. Using the link invalidates it automatically once the password is changed.
+
+---
+
+## POST /api/auth/reset-password
+
+Consumes a password-reset token and sets a new password. No authorization header required.
+
+<ParamField body="token" type="string" required>
+  The reset token received by email (the `reset_token` query parameter from the link).
+</ParamField>
+
+<ParamField body="nuevaPassword" type="string" required>
+  The new password. Minimum 6 characters.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Contraseña actualizada. Ya podés iniciar sesión."
+}
+```
+
+**Error responses**
+
+| Status | mensaje |
+|--------|---------|
+| 400 | `"Token inválido"` |
+| 400 | `"El link de recuperación venció. Solicitá uno nuevo."` |
+| 400 | `"Token inválido o ya utilizado"` |
+
+---
+
+## PUT /api/auth/tema
+
+Persists the user's UI theme preference (`light` or `dark`) in their profile. This value is returned in every subsequent `GET /api/auth/me` and login response.
+
+**Authorization:** `Bearer <token>` required.
+
+<ParamField body="tema" type="string" required>
+  Must be exactly `"light"` or `"dark"`.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Tema actualizado"
+}
+```

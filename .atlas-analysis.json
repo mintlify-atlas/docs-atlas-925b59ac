@@ -1,0 +1,161 @@
+{
+  "projectType": "saas",
+  "projectName": "Eme2App",
+  "projectDescription": "A full-stack invoicing and budgeting SaaS built with React + Vite on the frontend and Node.js + Express on the backend, targeting Spanish businesses with modules for invoices, quotes, expenses, treasury, PDF design, and AEAT tax validation.",
+  "theme": "luma",
+  "primaryColor": "#3b82f6",
+  "lightColor": "#eff6ff",
+  "darkColor": "#1A1A2E",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "deployment"
+            ]
+          },
+          {
+            "group": "Core Modules",
+            "pages": [
+              "modules/invoices",
+              "modules/quotes",
+              "modules/delivery-notes",
+              "modules/expenses",
+              "modules/treasury"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/company",
+              "configuration/users-roles",
+              "configuration/pdf-designer",
+              "configuration/fiscal-settings"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/aeat",
+              "integrations/email-smtp",
+              "integrations/reports-export"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Business Resources",
+            "pages": [
+              "api/invoices",
+              "api/quotes",
+              "api/delivery-notes",
+              "api/expenses",
+              "api/treasury"
+            ]
+          },
+          {
+            "group": "Master Data",
+            "pages": [
+              "api/clients",
+              "api/suppliers",
+              "api/articles",
+              "api/company"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "api/users",
+              "api/adminapp"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Invoicing with series, numbering, and status management",
+    "Quotes/budgets that can be converted to invoices",
+    "Delivery notes (albaranes) with grouped billing",
+    "Expense management / purchase invoices",
+    "Treasury module with due-date tracking and cobros",
+    "Visual PDF designer with WYSIWYG editor and live preview",
+    "AEAT tax-identity validation (individual and bulk up to 20,000 NIFs)",
+    "Multi-company support with role-based access (superadmin/admin/user)",
+    "SMTP email integration for sending documents directly",
+    "Excel and PDF report exports",
+    "PWA-ready React 19 frontend with Tailwind CSS",
+    "PostgreSQL backend via Prisma + Supabase compatibility",
+    "Vercel-ready deployment for both frontend and backend"
+  ],
+  "publicApiSurface": [
+    "GET /api/health",
+    "POST /api/auth/login",
+    "GET /api/auth/me",
+    "POST /api/auth/seleccionar-empresa",
+    "POST /api/auth/cambiar-password",
+    "POST /api/auth/solicitar-reset",
+    "POST /api/auth/reset-password",
+    "GET /api/facturas",
+    "POST /api/facturas",
+    "GET /api/facturas/:id",
+    "PUT /api/facturas/:id",
+    "DELETE /api/facturas/:id",
+    "POST /api/facturas/:id/anular",
+    "POST /api/facturas/:id/cobros",
+    "GET /api/facturas/:id/vencimientos",
+    "POST /api/facturas/:id/enviar-email",
+    "GET /api/presupuestos",
+    "POST /api/presupuestos",
+    "POST /api/presupuestos/:id/aceptar",
+    "POST /api/presupuestos/:id/enviar-email",
+    "GET /api/albaranes",
+    "POST /api/albaranes",
+    "POST /api/albaranes/:id/facturar",
+    "POST /api/albaranes/facturar-agrupado",
+    "GET /api/gastos",
+    "POST /api/gastos",
+    "GET /api/tesoreria/resumen",
+    "GET /api/tesoreria/vencimientos",
+    "POST /api/tesoreria/cobros",
+    "POST /api/tesoreria/cobros/agrupar",
+    "GET /api/clientes",
+    "POST /api/clientes",
+    "GET /api/proveedores",
+    "POST /api/proveedores",
+    "GET /api/articulos",
+    "POST /api/articulos",
+    "GET /api/empresa",
+    "PUT /api/empresa",
+    "PUT /api/empresa/logo/upload",
+    "GET /api/empresa/certificado",
+    "POST /api/empresa/certificado",
+    "GET /api/pdf-formatos",
+    "POST /api/pdf-formatos",
+    "GET /api/informes/facturas",
+    "GET /api/informes/iva",
+    "GET /api/informes/tesoreria",
+    "GET /api/informes/exportar/:tipo/:formato",
+    "POST /api/aeat/validar",
+    "POST /api/aeat/validar-masivo",
+    "GET /api/usuarios",
+    "POST /api/usuarios",
+    "GET /api/adminapp/empresas",
+    "GET /api/adminapp/usuarios",
+    "GET /api/version"
+  ]
+}

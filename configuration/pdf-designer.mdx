@@ -1,0 +1,226 @@
+---
+title: "PDF Template Designer: Customize Invoice Layouts"
+sidebarTitle: "PDF Designer"
+description: "Design custom PDF templates for invoices, quotes, and delivery notes using Eme2App's WYSIWYG editor with live preview, section styling, and token substitution."
+---
+
+The PDF Designer lets you build fully branded document layouts for invoices (`factura`), quotes (`presupuesto`), delivery notes (`albaran`), or any combination—without touching code. Each format is a named template stored in the `pdf_formatos` table, scoped to a specific empresa or even a single client. The designer provides a WYSIWYG rich-text editor for every document section (header, footer, notes, etc.), a separate editor for the line-item detail table, live preview panes for both, and a reusable style toolbar covering bold, italic, underline, font family, size, and color. Formats can be duplicated, reordered by drag-and-drop, and toggled active or inactive without deletion.
+
+---
+
+## Core Concepts
+
+### Ámbito (Scope)
+
+Each template has an `ambito` that determines when it is selected automatically:
+
+| Ámbito | Description |
+|---|---|
+| `global` | Applies to all documents unless overridden by a more specific scope. |
+| `empresa` | Applies to all documents for the active empresa. Overrides `global`. |
+| `cliente` | Applies to documents for a specific client. Overrides `empresa` and `global`. |
+
+### Tipo de Documento
+
+| Value | Applies to |
+|---|---|
+| `factura` | Invoices only |
+| `presupuesto` | Quotes only |
+| `albaran` | Delivery notes only |
+| `ambos` | Invoices and quotes |
+
+### Format Selection Logic
+
+When rendering a document, Eme2App calls `GET /api/pdf-formatos/aplicable` and selects the most specific active format: **client-level** → **empresa-level** → **global**. If no matching format is found, `datos` is `null` and the system falls back to its built-in layout.
+
+---
+
+## Template Tokens
+
+Inside any rich-text section you can insert dynamic tokens. Eme2App substitutes them at render time with values from the actual document:
+
+**Empresa tokens:**
+- `{{empresa.nombre_comercial}}` — Trading name of the issuing company
+- `{{empresa.codigo_postal}}` — Postal code of the issuing company
+- *(and other empresa fields following the same `{{empresa.<field>}}` pattern)*
+
+**Cliente tokens:**
+- `{{cliente.codigo_postal}}` — Client postal code
+- *(other client fields via `{{cliente.<field>}}`)*
+
+**Documento tokens:**
+- Follow the `{{documento.<field>}}` pattern for date, number, totals, and other document-level fields.
+
+<Tip>
+  Tokens that resolve to `null` or an empty value are replaced with an empty string—they never appear as raw `{{...}}` placeholders in the generated PDF.
+</Tip>
+
+---
+
+## API Reference
+
+### List Formats
+
+```http
+GET /api/pdf-formatos
+Authorization: Bearer <token>
+```
+
+Optional query parameters: `tipo_documento`, `ambito`, `activo` (filters the result set).
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "uuid",
+      "nombre": "Plantilla Principal",
+      "ambito": "empresa",
+      "tipo_documento": "ambos",
+      "orden": 1,
+      "activo": true,
+      "estructura": { "..." }
+    }
+  ]
+}
+```
+
+### Create a Format
+
+```http
+POST /api/pdf-formatos
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "nombre": "Plantilla Verano 2025",
+  "ambito": "empresa",
+  "tipo_documento": "factura",
+  "activo": true,
+  "estructura": {
+    "cabecera": { "contenido": "<p>{{empresa.nombre_comercial}}</p>", "estilos": {} },
+    "pie": { "contenido": "<p>Gracias por su confianza.</p>", "estilos": {} }
+  }
+}
+```
+
+`estructura` is a free-form JSON object; its shape is defined by the frontend designer and stored verbatim. The `orden` is assigned automatically based on existing formats of the same `tipo_documento`.
+
+### Get Applicable Format for a Document
+
+```http
+GET /api/pdf-formatos/aplicable?tipo_documento=factura&cliente_id=<uuid>&empresa_id=<uuid>
+Authorization: Bearer <token>
+```
+
+`tipo_documento` is required. `cliente_id` and `empresa_id` are optional and drive the scope resolution described above.
+
+### Duplicate a Format
+
+Creates an exact copy of an existing format with the name `"<nombre original> - Copia"`, placed at the end of the order for its document type.
+
+```http
+POST /api/pdf-formatos/:id/duplicar
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Formato PDF duplicado correctamente",
+  "datos": { "id": "new-uuid", "nombre": "Plantilla Verano 2025 - Copia", "..." }
+}
+```
+
+### Reorder Formats
+
+Send the complete ordered list of IDs for a given `tipo_documento`. Every ID in the existing set must be present—partial lists are rejected.
+
+```http
+PUT /api/pdf-formatos/orden
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "tipo_documento": "factura",
+  "ids": ["uuid-1", "uuid-3", "uuid-2"]
+}
+```
+
+<Warning>
+  You must include **all** format IDs for the given `tipo_documento`. Sending a partial list returns HTTP 400: `"Debes enviar todos los formatos del grupo para guardar el orden"`.
+</Warning>
+
+### Update a Format
+
+```http
+PUT /api/pdf-formatos/:id
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "nombre": "Plantilla Principal v2",
+  "ambito": "empresa",
+  "tipo_documento": "ambos",
+  "activo": true,
+  "estructura": { "..." }
+}
+```
+
+### Delete a Format
+
+```http
+DELETE /api/pdf-formatos/:id
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Formato PDF eliminado correctamente"
+}
+```
+
+---
+
+## Designer UI Walkthrough
+
+<Steps>
+  <Step title="Open the designer">
+    Navigate to **Configuración → Diseñador PDF**. The left panel lists all formats for the active empresa. Click **Nuevo formato** to open a blank template, or click any existing format to edit it.
+  </Step>
+  <Step title="Set metadata">
+    Enter the template **Nombre**, choose the **Ámbito** (global / empresa / cliente) and the **Tipo de documento** (factura, presupuesto, albaran, ambos). If Ámbito is `cliente`, select the specific client from the dropdown.
+  </Step>
+  <Step title="Edit sections">
+    Each section (e.g., *Cabecera*, *Pie*, *Notas*) has its own WYSIWYG editor. Use the style toolbar to apply **negrita**, *cursiva*, <u>subrayado</u>, color, font family, and font size. Insert tokens from the token picker or type them directly as `{{empresa.nombre_comercial}}`.
+  </Step>
+  <Step title="Style the detail table">
+    The line-item table has a dedicated editor. Toggle between the **Cabecera de tabla** and **Cuerpo de tabla** sub-sections to apply independent styles to column headers and data rows.
+  </Step>
+  <Step title="Preview and save">
+    The live preview panel updates as you type. When the layout looks correct, click **Guardar**. The format becomes available immediately for new documents.
+  </Step>
+  <Step title="Reorder and duplicate">
+    Drag formats in the list to reorder them. Use the **Duplicar** button to create a copy that you can customise further without affecting the original.
+  </Step>
+</Steps>
+
+<Note>
+  The detail table editor maintains **independent styles for the header row and the body rows**. Changes to the header style (column labels) do not affect the body style (line items), and vice versa. This allows you to, for example, use a bold dark background for column headers and a lighter font for the data rows.
+</Note>
+
+---
+
+## Access Control
+
+| Operation | Required Role |
+|---|---|
+| `GET /api/pdf-formatos` | Authenticated (any role) |
+| `GET /api/pdf-formatos/:id` | Authenticated (any role) |
+| `GET /api/pdf-formatos/aplicable` | Authenticated (any role) |
+| `POST /api/pdf-formatos` | `admin` |
+| `POST /api/pdf-formatos/:id/duplicar` | `admin` |
+| `PUT /api/pdf-formatos/:id` | `admin` |
+| `PUT /api/pdf-formatos/orden` | `admin` |
+| `DELETE /api/pdf-formatos/:id` | `admin` |

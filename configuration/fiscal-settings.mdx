@@ -1,0 +1,458 @@
+---
+title: "Fiscal Settings: IVA, IRPF, Régimen, and Payment Terms"
+sidebarTitle: "Fiscal Settings"
+description: "Configure IVA rates, IRPF regimes, fiscal regimes, territories, invoice series, and payment terms used across all documents in Eme2App."
+---
+
+Eme2App's fiscal configuration is built around a set of master-data catalogs, each scoped to the active empresa and referenced by clients, articles, and documents at creation time. Getting these catalogs right before you start issuing invoices ensures that tax rates, IRPF retentions, due-date schedules, and series numbering are all applied consistently and automatically. All read endpoints require authentication with a valid `empresa_id` in the JWT; write operations (create, update, delete) additionally require the `admin` role.
+
+---
+
+## Catalog Overview
+
+<CardGroup cols={3}>
+  <Card title="IVA" icon="percent" href="#iva">
+    VAT rates assigned to articles and invoice lines. Supports toggling rates active/inactive without deletion.
+  </Card>
+  <Card title="IRPF" icon="receipt" href="#irpf-regimes">
+    Withholding tax regimes assigned per client. Drive automatic IRPF deduction on invoices.
+  </Card>
+  <Card title="Régimen Fiscal" icon="building-columns" href="#regimen-fiscal">
+    Fiscal regime codes (e.g., régimen general, simplificado) assigned to clients for tax reporting.
+  </Card>
+  <Card title="Territorio Fiscal" icon="map" href="#territorio-fiscal">
+    Fiscal territories (Peninsular, Canarias, Ceuta, Melilla, Extranjero) controlling applicable tax rules.
+  </Card>
+  <Card title="Series de Facturas" icon="list-ol" href="#invoice-series">
+    Prefix and sequence control for invoice numbering. Supports rectificative series.
+  </Card>
+  <Card title="Formas de Pago" icon="credit-card" href="#formas-de-pago">
+    Payment terms that define installment schedules and drive automatic due-date generation on invoices.
+  </Card>
+  <Card title="Instrumentos de Pago" icon="money-bill-transfer" href="#instrumentos-de-pago">
+    Payment instruments (transfer, cash, cheque, etc.) used when registering cobros and configuring installments.
+  </Card>
+</CardGroup>
+
+---
+
+## IVA
+
+**Route:** `/api/iva`
+
+IVA records define the VAT rates available across the empresa. Each article is linked to one IVA record; invoice lines inherit the rate from the article or can override it at line level. Rates can be toggled active/inactive independently—inactive rates are hidden from selectors but preserved on historical lines.
+
+**Schema fields (`iva` model):**
+
+| Field | Type | Description |
+|---|---|---|
+| `codigo` | string (20) | Short code, unique per empresa (e.g., `"IVA21"`) |
+| `nombre` | string (100) | Display name (e.g., `"IVA General 21%"`) |
+| `porcentaje` | decimal (5,2) | Tax rate as a number (e.g., `21.00`) |
+| `descripcion` | string \| null | Optional free-text note |
+| `estado` | boolean | `true` = active, `false` = inactive |
+
+### API Operations
+
+```http
+GET    /api/iva              # List all IVA rates for the active empresa
+GET    /api/iva/:id          # Get a single IVA record
+POST   /api/iva              # Create (admin)
+PUT    /api/iva/:id          # Update (admin)
+DELETE /api/iva/:id          # Delete (admin) — returns 409 if rate is in use
+PATCH  /api/iva/:id/toggle-estado  # Toggle active/inactive (admin)
+```
+
+**Create an IVA rate:**
+
+```http
+POST /api/iva
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "codigo": "IVA21",
+  "nombre": "IVA General 21%",
+  "porcentaje": 21.00,
+  "descripcion": "Tipo general de IVA"
+}
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "IVA creado exitosamente",
+  "datos": {
+    "id": "char-36-uuid",
+    "codigo": "IVA21",
+    "nombre": "IVA General 21%",
+    "porcentaje": "21.00",
+    "estado": true
+  }
+}
+```
+
+<Warning>
+  Attempting to delete an IVA rate that is referenced by an article or invoice line returns HTTP 409: `"IVA en uso"`. Toggle it inactive instead.
+</Warning>
+
+---
+
+## IRPF Regimes
+
+**Route:** `/api/regimenes-irpf`
+
+IRPF retention regimes are assigned to clients and determine the withholding percentage applied automatically on invoices. The `GET` endpoint returns only active regimes (`estado = true`).
+
+**Schema fields (`regimenes_irpf` model):**
+
+| Field | Type | Description |
+|---|---|---|
+| `codigo` | string (10) | Short code, unique per empresa (e.g., `"IRPF15"`) |
+| `descripcion` | string (200) | Human-readable description |
+| `porcentaje_irpf` | decimal (5,2) | Retention percentage (e.g., `15.00`) |
+| `estado` | boolean | Active/inactive |
+
+### API Operations
+
+```http
+GET /api/regimenes-irpf    # List active IRPF regimes for the active empresa
+```
+
+<Note>
+  The IRPF catalog is read-only through the public API. Create and manage records through the admin configuration panel or directly in the database as part of initial setup.
+</Note>
+
+**Example response:**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "char-36-uuid",
+      "codigo": "IRPF15",
+      "descripcion": "Retención IRPF 15% — Actividades profesionales",
+      "porcentaje_irpf": "15.00",
+      "estado": true
+    },
+    {
+      "id": "char-36-uuid-2",
+      "codigo": "IRPF7",
+      "descripcion": "Retención IRPF 7% — Inicio de actividad",
+      "porcentaje_irpf": "7.00",
+      "estado": true
+    }
+  ],
+  "total": 2
+}
+```
+
+---
+
+## Régimen Fiscal
+
+**Route:** `/api/regimen-fiscal`
+
+Fiscal regimes are assigned to clients and appear on invoice XML exports and tax reports. Each regime has a short `codigo` (e.g., `"01"` for régimen general) and a `nombre`. They support toggle-estado for soft deactivation.
+
+**Schema fields (`regimenes_fiscales` model):**
+
+| Field | Type | Description |
+|---|---|---|
+| `codigo` | string (10) | Unique code per empresa |
+| `nombre` | string (100) | Display name |
+| `descripcion` | string \| null | Optional description |
+| `estado` | boolean | Active/inactive |
+
+### API Operations
+
+```http
+GET    /api/regimen-fiscal              # List all fiscal regimes
+GET    /api/regimen-fiscal/:id          # Get by ID
+POST   /api/regimen-fiscal              # Create (admin)
+PUT    /api/regimen-fiscal/:id          # Update (admin)
+DELETE /api/regimen-fiscal/:id          # Delete (admin) — 409 if in use
+PATCH  /api/regimen-fiscal/:id/toggle-estado  # Toggle active/inactive (admin)
+```
+
+**Create a fiscal regime:**
+
+```http
+POST /api/regimen-fiscal
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "codigo": "01",
+  "nombre": "Régimen General",
+  "descripcion": "Régimen general del IVA"
+}
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Régimen fiscal creado exitosamente",
+  "datos": { "id": "...", "codigo": "01", "nombre": "Régimen General", "estado": true }
+}
+```
+
+---
+
+## Territorio Fiscal
+
+**Route:** `/api/territorio-fiscal`
+
+Fiscal territories determine which VAT rules apply to a client or supplier. Eme2App ships with standard Spanish territories; the read-only `GET` endpoint returns only active territories for the empresa.
+
+**Schema fields (`territorios_fiscales` model):**
+
+| Field | Type | Description |
+|---|---|---|
+| `codigo` | string (10) | Unique code per empresa (e.g., `"PEN"`, `"CAN"`, `"CEU"`, `"MEL"`, `"INT"`) |
+| `nombre` | string (100) | Display name (e.g., `"Peninsular e Islas Baleares"`) |
+| `estado` | boolean | Active/inactive |
+
+### API Operations
+
+```http
+GET /api/territorio-fiscal    # List active fiscal territories for the active empresa
+```
+
+**Example response:**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    { "id": "...", "codigo": "PEN", "nombre": "Peninsular e Islas Baleares", "estado": true },
+    { "id": "...", "codigo": "CAN", "nombre": "Canarias", "estado": true },
+    { "id": "...", "codigo": "CEU", "nombre": "Ceuta", "estado": true },
+    { "id": "...", "codigo": "MEL", "nombre": "Melilla", "estado": true },
+    { "id": "...", "codigo": "INT", "nombre": "Extranjero", "estado": true }
+  ],
+  "total": 5
+}
+```
+
+<Tip>
+  When creating a client with a foreign `pais_id`, the country catalog provides a `territorio_fiscal_codigo` field that pre-fills this selector automatically.
+</Tip>
+
+---
+
+## Invoice Series
+
+**Route:** `/api/series-facturas`
+
+Series let you maintain separate sequential numbering streams per document type, year, or business unit. Each series has a short `codigo` (the prefix) and a `nombre`. One series can be flagged as `es_rectificativa` to mark it as the series for credit notes. Series must be enabled at the empresa level (`usa_series: true` in the empresa profile) for the series selector to appear on invoice forms.
+
+**Schema fields (`series_facturas` model):**
+
+| Field | Type | Description |
+|---|---|---|
+| `codigo` | string (20) | Prefix code, unique per empresa (e.g., `"A"`, `"2025"`) |
+| `nombre` | string (120) | Display name (e.g., `"Serie General 2025"`) |
+| `es_rectificativa` | boolean | `true` = this series is used for rectificative invoices (credit notes) |
+| `es_predeterminada` | boolean | `true` = default series for new invoices |
+| `estado` | boolean | Active/inactive |
+
+### API Operations
+
+```http
+GET    /api/series-facturas              # List series for the active empresa
+POST   /api/series-facturas              # Create (admin)
+PUT    /api/series-facturas/:id          # Update (admin)
+DELETE /api/series-facturas/:id          # Delete (admin)
+PATCH  /api/series-facturas/:id/toggle-estado  # Toggle active/inactive (admin)
+```
+
+**Create a series:**
+
+```http
+POST /api/series-facturas
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "codigo": "A",
+  "nombre": "Serie General 2025",
+  "es_rectificativa": false
+}
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Serie creada exitosamente",
+  "datos": {
+    "id": "...",
+    "codigo": "A",
+    "nombre": "Serie General 2025",
+    "es_rectificativa": false,
+    "es_predeterminada": false,
+    "estado": true
+  }
+}
+```
+
+<Note>
+  Invoice uniqueness is enforced at the database level on `(empresa_id, numero, serie)`. Two invoices can share the same `numero` only if they belong to different series.
+</Note>
+
+---
+
+## Formas de Pago
+
+**Route:** `/api/formas-pago`
+
+Payment terms define how and when a client is expected to pay. Each forma de pago can have one or more **vencimientos** (installment schedules) that specify the number of days to the due date, the percentage of the total, and the payment instrument. When an invoice is saved, Eme2App automatically generates `facturas_vencimientos` records from the active forma de pago configuration.
+
+**Schema fields (`formas_pago` model):**
+
+| Field | Type | Description |
+|---|---|---|
+| `codigo` | string (30) | Unique code per empresa (e.g., `"CONTADO"`, `"30D"`) |
+| `nombre` | string (120) | Display name (e.g., `"Contado"`, `"30 días fecha factura"`) |
+| `descripcion` | string \| null | Optional description |
+| `activo` | boolean | Active/inactive |
+
+### API Operations
+
+```http
+GET    /api/formas-pago              # List all payment terms
+GET    /api/formas-pago/:id          # Get by ID
+POST   /api/formas-pago              # Create (admin)
+PUT    /api/formas-pago/:id          # Update (admin)
+DELETE /api/formas-pago/:id          # Delete (admin) — 409 if in use
+PATCH  /api/formas-pago/:id/toggle-estado  # Toggle active/inactive (admin)
+```
+
+**Create a payment term:**
+
+```http
+POST /api/formas-pago
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "codigo": "30D",
+  "nombre": "30 días fecha factura",
+  "descripcion": "Pago único a 30 días"
+}
+```
+
+### Configuring Installment Schedules (Vencimientos)
+
+Each forma de pago can have multiple installments. The sum of `porcentaje` values across all installments **must equal 100**.
+
+```http
+POST /api/formas-pago/:id/vencimientos
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "vencimientos": [
+    {
+      "numero_cuota": 1,
+      "porcentaje": 50.00,
+      "dias_vencimiento": 30,
+      "instrumento_id": "uuid-of-instrumento"
+    },
+    {
+      "numero_cuota": 2,
+      "porcentaje": 50.00,
+      "dias_vencimiento": 60,
+      "instrumento_id": "uuid-of-instrumento"
+    }
+  ]
+}
+```
+
+```http
+GET    /api/formas-pago/:id/vencimientos   # Read current installment config
+DELETE /api/formas-pago/:id/vencimientos   # Remove all installments (admin)
+```
+
+<Warning>
+  Every installment must have a valid `instrumento_id`. Sending an installment without one returns HTTP 400: `"Cada vencimiento debe tener un instrumento de pago asignado"`.
+</Warning>
+
+---
+
+## Instrumentos de Pago
+
+**Route:** `/api/instrumentos-pago`
+
+Payment instruments represent the physical or digital mechanism used to settle an invoice: bank transfer, cash, cheque, direct debit, etc. They are referenced both in forma de pago installment configuration and when recording a `cobro` (payment receipt). Instruments with `remesable: true` can be included in payment batches.
+
+**Schema fields (`instrumentos_pago` model):**
+
+| Field | Type | Description |
+|---|---|---|
+| `nombre` | string (120) | Display name, unique per empresa (e.g., `"Transferencia bancaria"`) |
+| `codigo` | string (20) \| null | Short code, unique per empresa |
+| `remesable` | boolean | Whether this instrument supports payment batching |
+| `activo` | boolean | Active/inactive |
+
+### API Operations
+
+```http
+GET    /api/instrumentos-pago              # List instruments for the active empresa
+GET    /api/instrumentos-pago/:id          # Get by ID
+POST   /api/instrumentos-pago              # Create (admin)
+PUT    /api/instrumentos-pago/:id          # Update (admin)
+DELETE /api/instrumentos-pago/:id          # Delete or deactivate if in use (admin)
+PATCH  /api/instrumentos-pago/:id/toggle-estado  # Toggle active/inactive (admin)
+POST   /api/instrumentos-pago/importar-predeterminados  # Import default set (admin)
+```
+
+**Create an instrument:**
+
+```http
+POST /api/instrumentos-pago
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "nombre": "Transferencia bancaria",
+  "codigo": "TRF",
+  "remesable": false
+}
+```
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Instrumento de pago creado exitosamente",
+  "datos": {
+    "id": "uuid",
+    "nombre": "Transferencia bancaria",
+    "codigo": "TRF",
+    "remesable": false,
+    "activo": true
+  }
+}
+```
+
+**Import default instruments:**
+
+```http
+POST /api/instrumentos-pago/importar-predeterminados
+Authorization: Bearer <token>
+```
+
+This seeds the empresa with a standard set of payment instruments. Instruments already present are skipped; the response lists how many were imported.
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Se importaron 4 instrumento(s): Transferencia bancaria, Efectivo, Cheque, Domiciliación",
+  "datos": { "total": 4, "importados": ["Transferencia bancaria", "Efectivo", "Cheque", "Domiciliación"] }
+}
+```
+
+<Note>
+  Deleting an instrument that is referenced by existing `cobros` or `facturas_vencimientos` records does **not** raise an error—instead, the instrument is deactivated (`activo = false`) and the record is preserved for historical integrity. The response indicates whether the record was hard-deleted or soft-deactivated.
+</Note>

@@ -1,0 +1,317 @@
+---
+title: "User Management and Role-Based Access Control"
+sidebarTitle: "Users & Roles"
+description: "Understand Eme2App's role system (superadmin, admin, user), manage user accounts, assign companies to users, and control per-module permissions."
+---
+
+Eme2App enforces a three-tier role model that controls both which API routes a request can reach and which company's data is visible. Every request after login carries a signed JWT that encodes the user's `rol` and, for non-superadmin users, their active `empresa_id`. Understanding how roles and company assignments interact is the foundation for securely onboarding new teammates and accountants.
+
+---
+
+## Role Overview
+
+<Tabs>
+  <Tab title="superadmin">
+    A `superadmin` account is a cross-company administrator. Its JWT contains **no** `empresa_id`, which grants access to the `GET /api/adminapp/*` namespace for platform-level management. Superadmins cannot be created through the normal user creation flow and should only exist as system bootstrap accounts.
+
+    **Capabilities:**
+    - Access all `/api/adminapp/*` routes
+    - Not bound to any single empresa
+    - Can reset admin passwords in non-production environments via `POST /api/auth/reset-admin`
+  </Tab>
+  <Tab title="admin">
+    An `admin` is the company administrator for one or more empresas they are assigned to. Most configuration endpoints—empresa profile, SMTP, certificates, IVA, series, etc.—require this role.
+
+    **Capabilities:**
+    - Full CRUD on all company configuration
+    - Create, update, and delete other users within the same empresa
+    - Assign roles (`admin` or `user`) to other accounts
+    - Activate and deactivate users
+  </Tab>
+  <Tab title="user">
+    A `user` is a standard business operator. They can read and write business data (invoices, quotes, clients, articles) but cannot modify company configuration or manage other users.
+
+    **Capabilities:**
+    - Full access to invoices, quotes, delivery notes, expenses, and clients
+    - Read access to all configuration catalogs (IVA, formas de pago, etc.)
+    - Can change their own password and UI theme preference
+    - Cannot modify company profile, SMTP, certificates, or users
+  </Tab>
+</Tabs>
+
+### Role Permissions Summary
+
+| Action | superadmin | admin | user |
+|---|:---:|:---:|:---:|
+| Read empresa profile | — | ✅ | ✅ |
+| Edit empresa profile / SMTP / certificates | — | ✅ | ❌ |
+| Create / edit / delete users | — | ✅ | ❌ |
+| Manage IVA, series, formas de pago | — | ✅ | ❌ |
+| Create invoices, quotes, clients | — | ✅ | ✅ |
+| Read fiscal catalogs | — | ✅ | ✅ |
+| Change own password & theme | ✅ | ✅ | ✅ |
+| Access `/api/adminapp/*` | ✅ | ❌ | ❌ |
+
+---
+
+## Multi-Company Support
+
+A single Eme2App user can be assigned to multiple empresas through the `usuario_empresas` join table. The active empresa is encoded in the JWT payload as `empresa_id`.
+
+### Login Flow
+
+<Steps>
+  <Step title="Submit credentials">
+    ```http
+    POST /api/auth/login
+    Content-Type: application/json
+
+    {
+      "email": "maria@empresa.es",
+      "password": "contraseña123"
+    }
+    ```
+  </Step>
+  <Step title="Single empresa — token issued immediately">
+    If the user has exactly one active empresa assignment, the response includes a token with `empresa_id` already embedded:
+
+    ```json
+    {
+      "estado": "exito",
+      "datos": {
+        "token": "<jwt>",
+        "usuario": {
+          "id": "...",
+          "email": "maria@empresa.es",
+          "rol": "admin",
+          "empresa_id": "uuid-of-empresa",
+          "tema": "light"
+        }
+      }
+    }
+    ```
+  </Step>
+  <Step title="Multiple empresas — company selection required">
+    If the user belongs to more than one empresa, the response includes `requiere_seleccion_empresa: true` and a list of available companies:
+
+    ```json
+    {
+      "estado": "exito",
+      "datos": {
+        "requiere_seleccion_empresa": true,
+        "token": "<jwt-sin-empresa>",
+        "empresas": [
+          { "empresa_id": "uuid-a", "nombre": "Empresa A S.L.", "nombre_comercial": "EmpresaA" },
+          { "empresa_id": "uuid-b", "nombre": "Empresa B S.A.", "nombre_comercial": "EmpresaB" }
+        ]
+      }
+    }
+    ```
+  </Step>
+  <Step title="Select empresa — get a scoped token">
+    Exchange the company-less token for one that includes the chosen `empresa_id`:
+
+    ```http
+    POST /api/auth/seleccionar-empresa
+    Authorization: Bearer <jwt-sin-empresa>
+    Content-Type: application/json
+
+    {
+      "empresa_id": "uuid-a"
+    }
+    ```
+
+    ```json
+    {
+      "estado": "exito",
+      "datos": {
+        "token": "<jwt-con-empresa-id>",
+        "usuario": { "empresa_id": "uuid-a", "..." }
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The empresa selector can also be used at any time after login to switch between assigned companies without re-entering credentials. Store and replace the token returned by `POST /api/auth/seleccionar-empresa`.
+</Note>
+
+---
+
+## Managing Users
+
+All user management endpoints live under `/api/usuarios` and require the `admin` role, except `PUT /api/usuarios/:id`, which also allows the authenticated user to update their own record (though only an admin can change roles).
+
+### List All Users
+
+```http
+GET /api/usuarios
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "char-36-uuid",
+      "email": "maria@empresa.es",
+      "nombre": "María García",
+      "rol": "admin",
+      "estado": true,
+      "created_at": "2024-01-15T10:00:00.000Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+### Create a User
+
+```http
+POST /api/usuarios
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "email": "juan@empresa.es",
+  "password": "minimo6chars",
+  "nombre": "Juan Martínez",
+  "rol": "user"
+}
+```
+
+**Validation rules:**
+- `email` — valid email format, must be unique across all users
+- `password` — minimum 6 characters; stored as bcrypt hash (cost 10)
+- `nombre` — non-empty string
+- `rol` — must be `"admin"` or `"user"` (not `"superadmin"`)
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Usuario creado exitosamente",
+  "datos": { "id": "...", "email": "juan@empresa.es", "nombre": "Juan Martínez", "rol": "user" }
+}
+```
+
+### Update a User
+
+```http
+PUT /api/usuarios/:id
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "nombre": "Juan Martínez López",
+  "rol": "admin",
+  "estado": true
+}
+```
+
+All fields are optional. An admin can update any field; a regular user can only update their own `nombre` and `password` (not `rol` or `estado`).
+
+### Delete (Deactivate) a User
+
+```http
+DELETE /api/usuarios/:id
+Authorization: Bearer <token>
+```
+
+Deleting a user deactivates the account (`estado = false`) rather than removing the database record, preserving referential integrity with historical documents.
+
+---
+
+## Password Management
+
+### Change Password (Authenticated)
+
+Use this endpoint when the user knows their current password:
+
+```http
+POST /api/auth/cambiar-password
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "passwordActual": "contraseñaActual",
+  "passwordNueva": "nuevaContraseña123"
+}
+```
+
+### Forgot Password Flow
+
+<Steps>
+  <Step title="Request a reset link">
+    ```http
+    POST /api/auth/solicitar-reset
+    Content-Type: application/json
+
+    { "email": "juan@empresa.es" }
+    ```
+
+    The server sends an email with a signed link valid for **1 hour**. The response is always `200 OK` regardless of whether the email is registered, to avoid account enumeration.
+  </Step>
+  <Step title="Submit the new password">
+    The reset link encodes a signed JWT as `?reset_token=<token>`. Extract the token and POST:
+
+    ```http
+    POST /api/auth/reset-password
+    Content-Type: application/json
+
+    {
+      "token": "<reset-token-from-email-link>",
+      "nuevaPassword": "nuevaContraseña456"
+    }
+    ```
+
+    The token is single-use: once the password changes, the token secret changes and the link becomes invalid.
+  </Step>
+</Steps>
+
+<Warning>
+  If the account is deactivated, `POST /api/auth/solicitar-reset` returns HTTP 403 with the message `"La cuenta está desactivada. Contactá al administrador."` — the reset link is not sent.
+</Warning>
+
+---
+
+## UI Theme Preference
+
+Each user can toggle between light and dark mode independently of other users on the same empresa:
+
+```http
+PUT /api/auth/tema
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ "tema": "dark" }
+```
+
+Accepted values: `"light"` or `"dark"`. The preference is stored on the `usuarios` record and returned in every `/api/auth/me` response.
+
+---
+
+## Route-Level Protection Summary
+
+| Namespace | Protection |
+|---|---|
+| `GET /api/version` | Public — no auth required |
+| `POST /api/auth/login` | Public |
+| `POST /api/auth/solicitar-reset` | Public |
+| `POST /api/auth/reset-password` | Public |
+| `GET /api/auth/me` | Authenticated (`verificarAutenticacion`) |
+| `PUT /api/auth/tema` | Authenticated |
+| `POST /api/auth/cambiar-password` | Authenticated |
+| `POST /api/auth/seleccionar-empresa` | Authenticated |
+| `GET /api/usuarios` | Authenticated + `admin` role |
+| `POST /api/usuarios` | Authenticated + `admin` role |
+| `DELETE /api/usuarios/:id` | Authenticated + `admin` role |
+| `PUT /api/usuarios/:id` | Authenticated (admin for role changes) |
+| `PUT /api/empresa`, `POST /api/empresa/certificado`, etc. | Authenticated + `admin` role |
+| `GET /api/adminapp/*` | Authenticated + `superadmin` role |
+| All other `/api/*` routes | Authenticated + active `empresa_id` in JWT |
+
+<Note>
+  All routes under `/api/*` (except the public ones listed above) validate the JWT and extract `empresa_id`. Requests without a valid token receive `HTTP 401`. Requests with a valid token but insufficient role receive `HTTP 403`.
+</Note>

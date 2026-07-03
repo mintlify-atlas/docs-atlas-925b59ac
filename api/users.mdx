@@ -1,0 +1,355 @@
+---
+title: "Users API: Create and Manage Company User Accounts"
+sidebarTitle: "Users"
+description: "REST API reference for Eme2App user management. Create, update, and delete users within your company. Requires admin role. Distinct from the superadmin adminapp endpoints."
+---
+
+The Users API lets administrators manage the people who have access to their company workspace in Eme2App. Every request operates within the scope of a single **empresa** — the company encoded in the caller's JWT — so one admin cannot accidentally read or modify users belonging to a different tenant. Creating a user here automatically associates them to the caller's company through the `usuario_empresas` join table. If you need to provision users across multiple companies or perform cross-tenant operations, use the [Admin App API](/api/adminapp) instead, which exposes the equivalent endpoints under `/api/adminapp/usuarios` and is restricted to the `superadmin` role.
+
+<Note>
+  All endpoints on this page require a valid Bearer token issued after login. The token must carry the `admin` role — except `PUT /api/usuarios/:id`, where a non-admin user may update **their own record** (but cannot change their `rol`).
+</Note>
+
+---
+
+## Authentication
+
+Every request must include the JWT in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+Tokens are issued by the login endpoint and embed the `empresa_id` and `rol` claims. A request that omits the header, presents an expired token, or carries insufficient privileges receives one of the following errors:
+
+| HTTP status | `estado` | Meaning |
+|---|---|---|
+| `401` | `error` | Token missing, expired, or invalid |
+| `403` | `error` | Valid token but insufficient role |
+
+---
+
+## Endpoints
+
+### GET /api/usuarios
+
+List all users belonging to the authenticated admin's company.
+
+**Required role:** `admin`
+
+```bash
+curl -X GET https://app.eme2app.com/api/usuarios \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "datos": [
+    {
+      "id": "a1b2c3d4-...",
+      "email": "maria@empresa.com",
+      "nombre": "María García",
+      "rol": "user",
+      "estado": true,
+      "created_at": "2024-01-15T10:30:00.000Z",
+      "updated_at": "2024-06-01T08:00:00.000Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+<ResponseField name="estado" type="string">
+  `"exito"` on success.
+</ResponseField>
+
+<ResponseField name="datos" type="array">
+  Array of user objects scoped to the caller's `empresa_id`.
+</ResponseField>
+
+<ResponseField name="datos[].id" type="string">
+  UUID (CHAR 36) uniquely identifying the user.
+</ResponseField>
+
+<ResponseField name="datos[].email" type="string">
+  The user's login email address. Globally unique across all companies.
+</ResponseField>
+
+<ResponseField name="datos[].nombre" type="string">
+  Display name of the user.
+</ResponseField>
+
+<ResponseField name="datos[].rol" type="string">
+  Role of the user within this company: `"admin"` or `"user"`.
+</ResponseField>
+
+<ResponseField name="datos[].estado" type="boolean">
+  `true` = active; `false` = deactivated. Deactivated users cannot log in.
+</ResponseField>
+
+<ResponseField name="total" type="integer">
+  Total number of users returned.
+</ResponseField>
+
+---
+
+### POST /api/usuarios
+
+Create a new user and assign them to the authenticated admin's company. If the email address is already registered in the system this endpoint returns `400 Bad Request` — use the Admin App API to assign an existing cross-company user to a second company.
+
+**Required role:** `admin`
+
+#### Request body
+
+<ParamField body="email" type="string" required>
+  Valid email address for the new user. Must be globally unique across the entire platform.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Minimum 6 characters. Stored as a bcrypt hash (cost 10) — never in plain text.
+</ParamField>
+
+<ParamField body="nombre" type="string" required>
+  Full display name of the user. Must not be empty.
+</ParamField>
+
+<ParamField body="rol" type="string" required>
+  Role within this company. Accepted values: `"admin"` or `"user"`. An `"admin"` can manage other users and access all configuration; a `"user"` has standard read/write access to business data.
+</ParamField>
+
+```bash
+curl -X POST https://app.eme2app.com/api/usuarios \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "pedro@empresa.com",
+    "password": "segura123",
+    "nombre": "Pedro Martínez",
+    "rol": "user"
+  }'
+```
+
+**Response `201 Created`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Usuario creado exitosamente",
+  "datos": {
+    "id": "b2c3d4e5-...",
+    "email": "pedro@empresa.com",
+    "nombre": "Pedro Martínez",
+    "rol": "user",
+    "estado": true,
+    "empresa_id": "f1e2d3c4-...",
+    "created_at": "2024-07-10T12:00:00.000Z",
+    "updated_at": "2024-07-10T12:00:00.000Z"
+  }
+}
+```
+
+**Error `400 Bad Request`** — validation failure or email already exists:
+
+```json
+{
+  "estado": "error",
+  "errores": [
+    { "msg": "Email inválido", "path": "email" }
+  ]
+}
+```
+
+or
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Error al crear usuario: El email ya existe"
+}
+```
+
+<ResponseField name="estado" type="string">
+  `"exito"` on success.
+</ResponseField>
+
+<ResponseField name="mensaje" type="string">
+  Human-readable confirmation: `"Usuario creado exitosamente"`.
+</ResponseField>
+
+<ResponseField name="datos" type="object">
+  The newly created user object, matching the shape returned by `GET /api/usuarios`.
+</ResponseField>
+
+---
+
+### PUT /api/usuarios/:id
+
+Update an existing user. Admins can update any user in their company. A non-admin user may only update their own record and cannot change the `rol` field.
+
+**Required role:** `admin` (to update any user or change `rol`). Authenticated user of any role (to update their own `nombre` or `password`).
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  The UUID of the user to update.
+</ParamField>
+
+#### Request body
+
+All fields are optional. Only send the fields you want to change.
+
+<ParamField body="nombre" type="string">
+  Updated display name. Must not be blank if provided.
+</ParamField>
+
+<ParamField body="password" type="string">
+  New password. Minimum 6 characters. Will be re-hashed before storage.
+</ParamField>
+
+<ParamField body="rol" type="string">
+  New role. Accepted values: `"admin"` or `"user"`. **Only an `admin` caller can change this field.** A non-admin user updating their own record must omit this field.
+</ParamField>
+
+<ParamField body="activo" type="boolean">
+  Activate (`true`) or deactivate (`false`) the user account. Alias of `estado`. **Admin only.**
+</ParamField>
+
+<ParamField body="estado" type="boolean">
+  Activate (`true`) or deactivate (`false`) the user account. Alias of `activo`. Both fields are accepted; if both are provided, `estado` takes precedence. **Admin only.**
+</ParamField>
+
+<Warning>
+  A non-admin user who tries to update another user's record receives `403 Forbidden`. Attempting to change `rol` as a non-admin is silently ignored at the controller level — submit the field only if you hold the `admin` role.
+</Warning>
+
+```bash
+curl -X PUT https://app.eme2app.com/api/usuarios/b2c3d4e5-... \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Pedro M. López",
+    "rol": "admin"
+  }'
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Usuario actualizado exitosamente",
+  "datos": {
+    "id": "b2c3d4e5-...",
+    "email": "pedro@empresa.com",
+    "nombre": "Pedro M. López",
+    "rol": "admin",
+    "estado": true,
+    "updated_at": "2024-07-11T09:15:00.000Z"
+  }
+}
+```
+
+**Error `403 Forbidden`** — non-admin attempting to update another user:
+
+```json
+{
+  "estado": "error",
+  "mensaje": "No tienes permiso para actualizar este usuario"
+}
+```
+
+---
+
+### DELETE /api/usuarios/:id
+
+Deactivate a user, revoking their ability to log in. This is a soft delete — the user record is preserved in the database.
+
+**Required role:** `admin`
+
+<Tip>
+  An admin cannot delete their own account through this endpoint. To remove the last admin from a company, reassign the role first or contact a superadmin.
+</Tip>
+
+#### Path parameters
+
+<ParamField path="id" type="string" required>
+  The UUID of the user to delete/deactivate.
+</ParamField>
+
+```bash
+curl -X DELETE https://app.eme2app.com/api/usuarios/b2c3d4e5-... \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "estado": "exito",
+  "mensaje": "Usuario eliminado exitosamente"
+}
+```
+
+**Error `400 Bad Request`**
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Error al eliminar usuario: <detail>"
+}
+```
+
+---
+
+## Error response shape
+
+All error responses across this API follow the same envelope:
+
+```json
+{
+  "estado": "error",
+  "mensaje": "Human-readable description"
+}
+```
+
+Validation errors produced by `express-validator` include an `errores` array instead of (or in addition to) `mensaje`:
+
+```json
+{
+  "estado": "error",
+  "errores": [
+    {
+      "type": "field",
+      "msg": "La contraseña debe tener al menos 6 caracteres",
+      "path": "password",
+      "location": "body"
+    }
+  ]
+}
+```
+
+---
+
+## User object reference
+
+Fields returned in `datos` for a single user record, derived from the `usuarios` Prisma model:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` (CHAR 36) | Primary key UUID |
+| `email` | `string` | Unique email address |
+| `nombre` | `string` | Display name (max 255 chars) |
+| `rol` | `string` | `"admin"` or `"user"` |
+| `estado` | `boolean` | Account active state |
+| `empresa_id` | `string` (UUID) | Company the user was created under |
+| `created_by` | `string \| null` | ID of the user who created this record |
+| `updated_by` | `string \| null` | ID of the user who last updated this record |
+| `created_at` | `string` (ISO 8601) | Creation timestamp |
+| `updated_at` | `string` (ISO 8601) | Last update timestamp |
+
+<Note>
+  The `password` field is **never** returned in any API response. Passwords are stored as bcrypt hashes and are not readable through the API.
+</Note>
